@@ -1,0 +1,95 @@
+# CyberShield-X SOAR Playbook: Data Exfiltration Response
+# Automated incident response for data exfiltration detection
+
+name: data_exfiltration_response
+description: >
+  Comprehensive data exfiltration incident response playbook.
+  Triggers on data exfiltration alerts or critical severity events.
+  Blocks egress traffic, quarantines suspicious processes,
+  collects forensic evidence, and creates an audit bundle.
+
+triggers:
+  - type: alert_type
+    conditions:
+      alert_type: data_exfiltration
+  - type: severity
+    conditions:
+      severity: critical
+
+variables:
+  soc_channel: "#soc-critical"
+  evidence_bucket: "s3://cybershield-evidence"
+
+steps:
+  # Step 1: Immediate notification
+  - name: notify_soc_exfiltration
+    action: notify
+    params:
+      channel: "#soc-critical"
+      message: "🚨 DATA EXFILTRATION detected on {{.host}} — destination {{.dest_ip}} — automated response initiated"
+
+  # Step 2: Parallel containment
+  - name: contain_exfiltration
+    action: parallel
+    parallel:
+      - name: block_egress_ip
+        action: block_ip
+        params:
+          ip: "{{.dest_ip}}"
+
+      - name: isolate_source
+        action: isolate_host
+        params:
+          host: "{{.host}}"
+        timeout: "30s"
+        on_error: continue
+
+  # Step 3: Quarantine the process/file responsible
+  - name: quarantine_exfil_process
+    action: quarantine_file
+    params:
+      path: "{{.process_path}}"
+      host: "{{.host}}"
+
+  # Step 4: Collect forensic evidence
+  - name: collect_evidence
+    action: parallel
+    parallel:
+      - name: forensic_snapshot
+        action: snapshot_forensic
+        params:
+          host: "{{.host}}"
+
+      - name: collect_network_logs
+        action: collect_logs
+        params:
+          host: "{{.host}}"
+          log_type: "network"
+
+  # Step 5: Enrich IOCs
+  - name: enrich_dest_ip
+    action: enrich_ioc
+    params:
+      ioc: "{{.dest_ip}}"
+
+  # Step 6: Create tracking ticket with evidence
+  - name: create_exfil_ticket
+    action: create_ticket
+    params:
+      title: "Data Exfiltration: {{.host}} → {{.dest_ip}}"
+      priority: "critical"
+      description: "Automated SOAR response — {{.bytes_transferred}} bytes transferred to {{.dest_ip}}"
+
+  # Step 7: Final notification
+  - name: notify_soc_summary
+    action: notify
+    params:
+      channel: "#soc-critical"
+      message: "✅ Data exfiltration response completed for {{.host}} — evidence collected, review forensics"
+
+on_failure:
+  - name: escalate_exfiltration
+    action: notify
+    params:
+      channel: "#soc-escalation"
+      message: "⚠️ Data exfiltration playbook FAILED for {{.host}} — IMMEDIATE manual intervention required"
