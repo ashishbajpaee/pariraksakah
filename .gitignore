@@ -51,3 +51,4 @@ datasets/*.csv
 htmlcov/
 .coverage
 coverage.xml
+.vercel
