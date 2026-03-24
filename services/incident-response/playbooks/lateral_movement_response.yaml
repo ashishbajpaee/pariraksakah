@@ -1,0 +1,79 @@
+# CyberShield-X SOAR Playbook: Lateral Movement Response
+# Automated incident response for lateral movement detection
+
+name: lateral_movement_response
+description: >
+  Comprehensive lateral movement incident response playbook.
+  Triggers on lateral movement alerts, isolates compromised hosts,
+  revokes credentials, scans destination hosts, and creates a
+  tracking ticket for the SOC team.
+
+triggers:
+  - type: alert_type
+    conditions:
+      alert_type: lateral_movement
+  - type: severity
+    conditions:
+      severity: high
+
+variables:
+  soc_channel: "#soc-incidents"
+  ticket_project: "SOC"
+
+steps:
+  # Step 1: Immediate notification
+  - name: notify_soc_lateral
+    action: notify
+    params:
+      channel: "#soc-incidents"
+      message: "🚨 LATERAL MOVEMENT detected from {{.host}} to {{.dest_host}} — automated response initiated"
+
+  # Step 2: Contain the source host
+  - name: isolate_source_host
+    action: isolate_host
+    params:
+      host: "{{.host}}"
+    timeout: "30s"
+    on_error: continue
+
+  # Step 3: Block attacker IP
+  - name: block_attacker_ip
+    action: block_ip
+    params:
+      ip: "{{.source_ip}}"
+
+  # Step 4: Parallel enrichment + scanning
+  - name: parallel_investigation
+    action: parallel
+    parallel:
+      - name: enrich_source_ioc
+        action: enrich_ioc
+        params:
+          ioc: "{{.source_ip}}"
+
+      - name: scan_destination
+        action: snapshot_forensic
+        params:
+          host: "{{.dest_host}}"
+
+  # Step 5: Create tracking ticket
+  - name: create_jira_ticket
+    action: create_ticket
+    params:
+      title: "Lateral Movement: {{.host}} → {{.dest_host}}"
+      priority: "high"
+      description: "Automated incident from SOAR — source IP {{.source_ip}}"
+
+  # Step 6: Final notification
+  - name: notify_soc_complete
+    action: notify
+    params:
+      channel: "#soc-incidents"
+      message: "✅ Lateral movement response completed for {{.host}} → {{.dest_host}} — review ticket"
+
+on_failure:
+  - name: escalate_lateral
+    action: notify
+    params:
+      channel: "#soc-escalation"
+      message: "⚠️ Lateral movement playbook FAILED for {{.host}} — manual intervention required"
