@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -22,6 +25,212 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// ── RBAC/ABAC Policy Structures ────────────────
+
+type PolicyAction string
+
+const (
+	ActionRead    PolicyAction = "read"
+	ActionWrite   PolicyAction = "write"
+	ActionDelete  PolicyAction = "delete"
+	ActionExecute PolicyAction = "execute"
+)
+
+type PolicyEffect string
+
+const (
+	Allow PolicyEffect = "allow"
+	Deny  PolicyEffect = "deny"
+)
+
+type Policy struct {
+	Resource   string                 `json:"resource"`             // /api/v1/soar, /api/v1/incidents, etc.
+	Action     PolicyAction           `json:"action"`               // read, write, delete, execute
+	Effect     PolicyEffect           `json:"effect"`               // allow, deny
+	Roles      []string               `json:"roles"`                // admin, analyst, responder, viewer
+	Conditions map[string]interface{} `json:"conditions,omitempty"` // severity, incident_status, etc.
+}
+
+var (
+	policyMu sync.RWMutex
+	policies []Policy
+)
+
+func initPolicies() {
+	policyMu.Lock()
+	defer policyMu.Unlock()
+
+	policies = []Policy{
+		// SOAR / Incident Response — Admin and responder only
+		{
+			Resource: "/soar",
+			Action:   ActionExecute,
+			Effect:   Allow,
+			Roles:    []string{"admin", "responder"},
+		},
+		// Incidents — Analyst can read, responder/admin can write/delete
+		{
+			Resource: "/incidents",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder"},
+		},
+		{
+			Resource: "/incidents",
+			Action:   ActionWrite,
+			Effect:   Allow,
+			Roles:    []string{"admin", "responder"},
+		},
+		{
+			Resource: "/incidents",
+			Action:   ActionDelete,
+			Effect:   Allow,
+			Roles:    []string{"admin"},
+		},
+		// Self-Healing — Admin and responder only
+		{
+			Resource: "/self-healing",
+			Action:   ActionExecute,
+			Effect:   Allow,
+			Roles:    []string{"admin", "responder"},
+		},
+		// Threat Detection — Read for all authenticated, write for admin
+		{
+			Resource: "/threats",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder", "viewer"},
+		},
+		{
+			Resource: "/threats",
+			Action:   ActionWrite,
+			Effect:   Allow,
+			Roles:    []string{"admin"},
+		},
+		// Alerts — Read for all authenticated
+		{
+			Resource: "/alerts",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder", "viewer"},
+		},
+		// Phishing — Read for analysts, execute for responders/admin
+		{
+			Resource: "/phishing",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder"},
+		},
+		{
+			Resource: "/phishing",
+			Action:   ActionExecute,
+			Effect:   Allow,
+			Roles:    []string{"admin", "responder"},
+		},
+		// Threat Hunting — Analysts and admins
+		{
+			Resource: "/threat-hunting",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst"},
+		},
+		{
+			Resource: "/threat-hunting",
+			Action:   ActionExecute,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst"},
+		},
+	}
+}
+
+type AuthContext struct {
+	UserID   string
+	Username string
+	Role     string
+}
+
+func extractAuthContext(r *http.Request) *AuthContext {
+	claims, ok := r.Context().Value("jwt_claims").(jwt.MapClaims)
+	if !ok {
+		return nil
+	}
+	return &AuthContext{
+		UserID:   claims["uid"].(string),
+		Username: claims["username"].(string),
+		Role:     claims["role"].(string),
+	}
+}
+
+func matchesAction(method string) PolicyAction {
+	switch method {
+	case "GET":
+		return ActionRead
+	case "POST", "PUT", "PATCH":
+		return ActionWrite
+	case "DELETE":
+		return ActionDelete
+	default:
+		return ""
+	}
+}
+
+func isAuthorized(ctx *AuthContext, resource string, action PolicyAction) bool {
+	if ctx == nil || ctx.Role == "" {
+		return false
+	}
+
+	policyMu.RLock()
+	defer policyMu.RUnlock()
+
+	for _, p := range policies {
+		// Check if policy matches resource and action
+		if p.Resource != resource || p.Action != action {
+			continue
+		}
+
+		// Check if user's role is in allowed roles
+		roleMatches := false
+		for _, role := range p.Roles {
+			if role == ctx.Role {
+				roleMatches = true
+				break
+			}
+		}
+
+		if roleMatches && p.Effect == Allow {
+			return true
+		}
+	}
+
+	return false
+}
+
+func AuthorizationMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := extractAuthContext(r)
+		if ctx == nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authentication context"})
+			return
+		}
+
+		action := matchesAction(r.Method)
+		resource := "/" + strings.TrimLeft(chi.RouteContext(r.Context()).RoutePattern(), "/")
+
+		// Check authorization
+		if !isAuthorized(ctx, resource, action) {
+			log.Printf("[AUTHZ-DENY] user=%s role=%s action=%s resource=%s", ctx.Username, ctx.Role, action, resource)
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "forbidden",
+				"msg":   "insufficient permissions for this action",
+			})
+			return
+		}
+
+		log.Printf("[AUTHZ-ALLOW] user=%s role=%s action=%s resource=%s", ctx.Username, ctx.Role, action, resource)
+		next.ServeHTTP(w, r)
+	})
+}
 
 // ── Configuration ──────────────────────────────
 
@@ -49,7 +258,31 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-var jwtSecret = []byte(env("JWT_SECRET", "cybershield-x-dev-secret-change-in-prod"))
+var (
+	authIssuer    = env("ACCESS_CONTROL_ISSUER", "http://access-control:8002")
+	tokenAudience = env("JWT_AUDIENCE", "pariraksakah-api")
+	jwksURL       = env("ACCESS_CONTROL_JWKS_URL", authIssuer+"/auth/.well-known/jwks.json")
+)
+
+type jwk struct {
+	Kty string `json:"kty"`
+	Kid string `json:"kid"`
+	Alg string `json:"alg"`
+	Use string `json:"use"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
+
+type jwks struct {
+	Keys []jwk `json:"keys"`
+}
+
+var (
+	jwksMu        sync.RWMutex
+	jwksCache     = map[string]*rsa.PublicKey{}
+	jwksFetchedAt time.Time
+	jwksTTL       = 5 * time.Minute
+)
 
 // ── Prometheus Metrics ─────────────────────────
 
@@ -159,12 +392,7 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		token, err := jwt.Parse(parts[1], func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return jwtSecret, nil
-		})
+		token, err := validateJWT(parts[1])
 
 		if err != nil || !token.Valid {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired token"})
@@ -181,6 +409,117 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), "jwt_claims", claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func validateJWT(tokenStr string) (*jwt.Token, error) {
+	return jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		kidRaw, ok := token.Header["kid"]
+		if !ok {
+			return nil, fmt.Errorf("missing kid")
+		}
+		kid, ok := kidRaw.(string)
+		if !ok || kid == "" {
+			return nil, fmt.Errorf("invalid kid")
+		}
+
+		key, err := getJWKPublicKey(kid)
+		if err != nil {
+			return nil, err
+		}
+		return key, nil
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Name}),
+		jwt.WithIssuer(authIssuer),
+		jwt.WithAudience(tokenAudience),
+	)
+}
+
+func getJWKPublicKey(kid string) (*rsa.PublicKey, error) {
+	jwksMu.RLock()
+	if time.Since(jwksFetchedAt) < jwksTTL {
+		if key, ok := jwksCache[kid]; ok {
+			jwksMu.RUnlock()
+			return key, nil
+		}
+	}
+	jwksMu.RUnlock()
+
+	if err := refreshJWKS(); err != nil {
+		return nil, err
+	}
+
+	jwksMu.RLock()
+	defer jwksMu.RUnlock()
+	key, ok := jwksCache[kid]
+	if !ok {
+		return nil, fmt.Errorf("no public key for kid %s", kid)
+	}
+	return key, nil
+}
+
+func refreshJWKS() error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(jwksURL)
+	if err != nil {
+		return fmt.Errorf("jwks fetch failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("jwks fetch returned status %d", resp.StatusCode)
+	}
+
+	var doc jwks
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return fmt.Errorf("jwks decode failed: %w", err)
+	}
+
+	next := make(map[string]*rsa.PublicKey, len(doc.Keys))
+	for _, key := range doc.Keys {
+		if key.Kty != "RSA" || key.N == "" || key.E == "" || key.Kid == "" {
+			continue
+		}
+		pub, err := parseRSAPublicKeyFromJWK(key.N, key.E)
+		if err != nil {
+			continue
+		}
+		next[key.Kid] = pub
+	}
+	if len(next) == 0 {
+		return fmt.Errorf("jwks did not contain usable keys")
+	}
+
+	jwksMu.Lock()
+	jwksCache = next
+	jwksFetchedAt = time.Now()
+	jwksMu.Unlock()
+	return nil
+}
+
+func parseRSAPublicKeyFromJWK(nEnc, eEnc string) (*rsa.PublicKey, error) {
+	nBytes, err := base64.RawURLEncoding.DecodeString(nEnc)
+	if err != nil {
+		return nil, fmt.Errorf("invalid n value: %w", err)
+	}
+	eBytes, err := base64.RawURLEncoding.DecodeString(eEnc)
+	if err != nil {
+		return nil, fmt.Errorf("invalid e value: %w", err)
+	}
+	if len(eBytes) == 0 {
+		return nil, fmt.Errorf("empty exponent")
+	}
+	e := new(big.Int).SetBytes(eBytes)
+	if !e.IsInt64() {
+		return nil, fmt.Errorf("invalid exponent")
+	}
+
+	return &rsa.PublicKey{
+		N: new(big.Int).SetBytes(nBytes),
+		E: int(e.Int64()),
+	}, nil
 }
 
 // ── Rate Limit Middleware ──────────────────────
@@ -334,6 +673,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 func main() {
 	port := env("PORT", "8000")
 	rateLimiter := NewRateLimiter(100, time.Minute) // 100 req/min per IP
+	initPolicies()
 
 	r := chi.NewRouter()
 
@@ -369,13 +709,13 @@ func main() {
 	r.Get("/api/v1/alerts", liveAlertsHandler)
 
 	// ── Public Auth (login to get JWT) ──
-	r.Post("/api/v1/auth/login",  proxyToExact(services["access-control"].URL+"/auth/login"))
+	r.Post("/api/v1/auth/login", proxyToExact(services["access-control"].URL+"/auth/login"))
 	r.Post("/api/v1/auth/verify", proxyToExact(services["access-control"].URL+"/auth/verify"))
 
 	// ── Public scan endpoints (no auth required) ──
-	r.Post("/api/v1/phishing/check/url",   proxyToExact(services["anti-phishing"].URL+"/analyze/url"))
+	r.Post("/api/v1/phishing/check/url", proxyToExact(services["anti-phishing"].URL+"/analyze/url"))
 	r.Post("/api/v1/phishing/check/email", proxyToExact(services["anti-phishing"].URL+"/analyze/email"))
-	r.Get("/api/v1/threats/recent",        proxyToExact(services["threat-detection"].URL+"/threats/recent"))
+	r.Get("/api/v1/threats/recent", proxyToExact(services["threat-detection"].URL+"/threats/recent"))
 
 	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) {
 		// Check upstream health
@@ -415,6 +755,7 @@ func main() {
 	// ── Protected API Routes ──
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(JWTAuthMiddleware)
+		r.Use(AuthorizationMiddleware)
 
 		// Threat Detection & Metrics
 		r.Route("/threats", func(r chi.Router) {
@@ -490,7 +831,7 @@ func main() {
 
 	go func() {
 		log.Printf("🚀 Parirakṣakaḥ API Gateway v1.0.0 starting on :%s", port)
-		log.Printf("   Routes: 9 upstream services, JWT auth, rate limit 100/min")
+		log.Printf("   Routes: 9 upstream services, JWT auth, RBAC policies, rate limit 100/min")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}
@@ -612,45 +953,47 @@ func liveDashboardHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Pull REAL counters from service stats
-	threatStats    := allStats["threat-detection"]
-	phishingStats  := allStats["anti-phishing"]
-	cfStats        := allStats["cognitive-firewall"]
-	incidentStats  := allStats["incident-response"]
+	threatStats := allStats["threat-detection"]
+	phishingStats := allStats["anti-phishing"]
+	cfStats := allStats["cognitive-firewall"]
+	incidentStats := allStats["incident-response"]
 
-	totalEvents     := intFromMap(threatStats, "events_processed")
+	totalEvents := intFromMap(threatStats, "events_processed")
 	threatsDetected := intFromMap(threatStats, "threats_detected")
-	emailsAnalyzed  := intFromMap(phishingStats, "emails_analyzed")
+	emailsAnalyzed := intFromMap(phishingStats, "emails_analyzed")
 	phishingBlocked := intFromMap(phishingStats, "phishing_blocked")
-	urlsAnalyzed    := intFromMap(phishingStats, "urls_analyzed")
-	rulesActive     := intFromMap(cfStats, "rules_active")
-	ipsBlocked      := intFromMap(cfStats, "ips_blocked")
-	totalIncidents  := intFromMap(incidentStats, "total_incidents")
-	autoContained   := intFromMap(incidentStats, "auto_contained")
+	urlsAnalyzed := intFromMap(phishingStats, "urls_analyzed")
+	rulesActive := intFromMap(cfStats, "rules_active")
+	ipsBlocked := intFromMap(cfStats, "ips_blocked")
+	totalIncidents := intFromMap(incidentStats, "total_incidents")
+	autoContained := intFromMap(incidentStats, "auto_contained")
 
 	// Combine into single blocked count
 	totalBlocked := phishingBlocked + ipsBlocked + autoContained
 
 	// Build severity distribution from real threat data
 	criticalCount := int(threatsDetected / 8)
-	highCount     := int(threatsDetected / 4)
-	mediumCount   := int(threatsDetected / 2)
-	lowCount      := int(threatsDetected - int64(criticalCount+highCount+mediumCount))
-	if lowCount < 0 { lowCount = 0 }
+	highCount := int(threatsDetected / 4)
+	mediumCount := int(threatsDetected / 2)
+	lowCount := int(threatsDetected - int64(criticalCount+highCount+mediumCount))
+	if lowCount < 0 {
+		lowCount = 0
+	}
 
 	// Uptime as fallback for zero-traffic scenario label
 	uptime := time.Since(gatewayStartTime).Seconds()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		// Real counts from services
-		"total_events_24h":      totalEvents,
-		"active_threats":        threatsDetected,
-		"blocked_attacks":       totalBlocked,
-		"mean_detect_time_ms":   12,
-		"healthy_services":      healthyCount,
-		"total_services":        len(svcNames),
-		"uptime_seconds":        int64(uptime),
-		"gateway_started_at":    gatewayStartTime.UTC().Format(time.RFC3339),
-		"services":              healthResults,
+		"total_events_24h":    totalEvents,
+		"active_threats":      threatsDetected,
+		"blocked_attacks":     totalBlocked,
+		"mean_detect_time_ms": 12,
+		"healthy_services":    healthyCount,
+		"total_services":      len(svcNames),
+		"uptime_seconds":      int64(uptime),
+		"gateway_started_at":  gatewayStartTime.UTC().Format(time.RFC3339),
+		"services":            healthResults,
 		"alerts_by_severity": map[string]int{
 			"critical": criticalCount,
 			"high":     highCount,
@@ -659,22 +1002,22 @@ func liveDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		},
 		// Extended real stats
 		"extended": map[string]interface{}{
-			"emails_analyzed":  emailsAnalyzed,
-			"urls_scanned":     urlsAnalyzed,
-			"phishing_blocked": phishingBlocked,
-			"firewall_rules":   rulesActive,
-			"ips_blocked":      ipsBlocked,
-			"incidents_total":  totalIncidents,
+			"emails_analyzed":          emailsAnalyzed,
+			"urls_scanned":             urlsAnalyzed,
+			"phishing_blocked":         phishingBlocked,
+			"firewall_rules":           rulesActive,
+			"ips_blocked":              ipsBlocked,
+			"incidents_total":          totalIncidents,
 			"incidents_auto_contained": autoContained,
 		},
 		// Attack type breakdown — real if data available, else zero
 		"top_attack_types": []map[string]interface{}{
-			{"name": "Lateral Movement",  "count": int(threatsDetected * 35 / 100)},
-			{"name": "C2 Beacon",         "count": int(threatsDetected * 21 / 100)},
-			{"name": "Credential Theft",  "count": int(threatsDetected * 18 / 100)},
-			{"name": "Ransomware",        "count": int(threatsDetected * 10 / 100)},
-			{"name": "Data Exfiltration", "count": int(threatsDetected * 8  / 100)},
-			{"name": "Phishing",          "count": int(phishingBlocked)},
+			{"name": "Lateral Movement", "count": int(threatsDetected * 35 / 100)},
+			{"name": "C2 Beacon", "count": int(threatsDetected * 21 / 100)},
+			{"name": "Credential Theft", "count": int(threatsDetected * 18 / 100)},
+			{"name": "Ransomware", "count": int(threatsDetected * 10 / 100)},
+			{"name": "Data Exfiltration", "count": int(threatsDetected * 8 / 100)},
+			{"name": "Phishing", "count": int(phishingBlocked)},
 		},
 	})
 }

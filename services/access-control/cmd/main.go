@@ -3,13 +3,16 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/rsa"
+	"crypto/subtle"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"strings"
@@ -21,15 +24,57 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/argon2"
+
+	"github.com/cybershield-x/access-control/internal/keymanagement"
+	"github.com/cybershield-x/access-control/internal/oidc"
 )
 
 // ── Config ────────────────────────────────────
 
 var (
-	jwtSecret  = []byte(env("JWT_SECRET", "changeme_jwt_secret"))
-	tokenTTL   = 15 * time.Minute
-	refreshTTL = 24 * time.Hour
+	tokenTTL          = 15 * time.Minute
+	refreshTTL        = 24 * time.Hour
+	authIssuer        = env("ACCESS_CONTROL_ISSUER", "http://access-control:8002")
+	tokenAudience     = env("JWT_AUDIENCE", "pariraksakah-api")
+	passwordPepper    = env("PASSWORD_PEPPER", "pariraksakah-dev-pepper-change-in-prod")
+	keysDir           = env("KEYS_DIR", "/etc/cybershield/keys")
+	keyRotationPeriod = parseDuration(env("KEY_ROTATION_PERIOD", "7d"), 7*24*time.Hour)
+	keyLifetime       = parseDuration(env("KEY_LIFETIME", "30d"), 30*24*time.Hour)
+	keyStore          *keymanagement.KeyStore
+
+	// OIDC Federation Configuration
+	oidcEnabled      = env("OIDC_ENABLED", "false") == "true"
+	oidcProviderURL  = env("OIDC_PROVIDER_URL", "")  // e.g., https://keycloak.example.com/realms/cybershield
+	oidcClientID     = env("OIDC_CLIENT_ID", "")     // e.g., pariraksakah-client
+	oidcClientSecret = env("OIDC_CLIENT_SECRET", "") // Must be set in environment (never in code)
+	oidcRedirectURI  = env("OIDC_REDIRECT_URI", "http://localhost:8002/auth/federation/callback")
+	oidcGroupRoleMap = parseGroupRoleMap(env("OIDC_GROUP_ROLE_MAP", "")) // JSON: {"security-team": "analyst", "admin-group": "admin"}
+
+	// OIDC client
+	oauth2Client *oidc.OAuth2Client
+	claimMapper  *oidc.ClaimMapper
+
+	// OIDC session state: state → {verifier, timestamp}
+	oidcStateMu  sync.RWMutex
+	oidcStateMap = map[string]*oidcSessionState{}
 )
+
+type oidcSessionState struct {
+	Verifier  string
+	Timestamp time.Time
+}
+
+func parseGroupRoleMap(input string) map[string]string {
+	result := make(map[string]string)
+	if input == "" {
+		return result
+	}
+	if err := json.Unmarshal([]byte(input), &result); err != nil {
+		log.Printf("warning: failed to parse OIDC_GROUP_ROLE_MAP: %v", err)
+	}
+	return result
+}
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -38,46 +83,42 @@ func env(key, def string) string {
 	return def
 }
 
+func parseDuration(s string, defaultDur time.Duration) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return defaultDur
+	}
+	return d
+}
+
 // ── Simple user store (demo — replace with DB) ─
 
 type User struct {
 	UserID   string
 	Username string
 	Role     string
-	PassHash string // SHA-256 hex of password
+	PassHash string // Argon2id encoded hash
 }
 
 var (
-	usersMu sync.RWMutex
-	users   = map[string]*User{
-		"admin": {
-			UserID:   "usr-001",
-			Username: "admin",
-			Role:     "admin",
-			PassHash: sha256hex("admin123"),
-		},
-		"analyst": {
-			UserID:   "usr-002",
-			Username: "analyst",
-			Role:     "analyst",
-			PassHash: sha256hex("analyst123"),
-		},
-		"viewer": {
-			UserID:   "usr-003",
-			Username: "viewer",
-			Role:     "viewer",
-			PassHash: sha256hex("viewer123"),
-		},
+	defaultUsers = []struct {
+		UserID   string
+		Username string
+		Role     string
+		Password string
+	}{
+		{UserID: "usr-001", Username: "admin", Role: "admin", Password: "admin123"},
+		{UserID: "usr-002", Username: "analyst", Role: "analyst", Password: "analyst123"},
+		{UserID: "usr-003", Username: "viewer", Role: "viewer", Password: "viewer123"},
 	}
+	usersMu sync.RWMutex
+	users   = map[string]*User{}
 	// session store: token_id → expiry
 	sessions   = map[string]time.Time{}
 	sessionsMu sync.RWMutex
 )
 
-func sha256hex(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return fmt.Sprintf("%x", h[:])
-}
+// SigningKey is managed by keymanagement.KeyStore
 
 // ── JWT helpers ───────────────────────────────
 
@@ -95,15 +136,30 @@ func issueToken(user *User, ttl time.Duration) (string, error) {
 			Subject:   user.UserID,
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
-			Issuer:    "pariraksakah-access-control",
+			Issuer:    authIssuer,
+			Audience:  []string{tokenAudience},
 			ID:        jti,
 		},
 		UserID:   user.UserID,
 		Username: user.Username,
 		Role:     user.Role,
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(jwtSecret)
+
+	// Get the current signing key from persistent key store
+	signingKey := keyStore.GetSigningKey()
+	if signingKey == nil {
+		return "", fmt.Errorf("signing key not available")
+	}
+
+	// Decode the private key for signing
+	privateKey, err := signingKey.DecodePrivateKey()
+	if err != nil {
+		return "", fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = signingKey.Kid
+	signed, err := token.SignedString(privateKey)
 	if err != nil {
 		return "", err
 	}
@@ -114,12 +170,11 @@ func issueToken(user *User, ttl time.Duration) (string, error) {
 }
 
 func validateToken(tokenStr string) (*Claims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method")
-		}
-		return jwtSecret, nil
-	})
+	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, tokenKeyFunc,
+		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Name}),
+		jwt.WithIssuer(authIssuer),
+		jwt.WithAudience(tokenAudience),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -137,16 +192,169 @@ func validateToken(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
+func tokenKeyFunc(token *jwt.Token) (interface{}, error) {
+	kidRaw, ok := token.Header["kid"]
+	if !ok {
+		return nil, fmt.Errorf("missing kid in token")
+	}
+	kid, ok := kidRaw.(string)
+	if !ok || kid == "" {
+		return nil, fmt.Errorf("invalid kid in token")
+	}
+
+	// Get all public keys from the key store (current and next)
+	publicKeys := keyStore.GetPublicKeys()
+	for _, key := range publicKeys {
+		if key.Kid == kid {
+			pubKey, err := key.DecodePublicKey()
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode public key: %w", err)
+			}
+			return pubKey, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown kid: %s", kid)
+}
+
 func randomHex(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
 	return fmt.Sprintf("%x", b)
 }
 
-func hmacSign(data, key string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(data))
-	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+func initUsers() error {
+	usersMu.Lock()
+	defer usersMu.Unlock()
+	for _, du := range defaultUsers {
+		hash, err := hashPassword(du.Password)
+		if err != nil {
+			return err
+		}
+		users[du.Username] = &User{
+			UserID:   du.UserID,
+			Username: du.Username,
+			Role:     du.Role,
+			PassHash: hash,
+		}
+	}
+	return nil
+}
+
+func hashPassword(password string) (string, error) {
+	const (
+		memory      = 64 * 1024
+		iterations  = 3
+		parallelism = 2
+		saltLen     = 16
+		keyLen      = 32
+	)
+
+	salt := make([]byte, saltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	hash := argon2.IDKey([]byte(password+passwordPepper), salt, iterations, memory, parallelism, keyLen)
+	return fmt.Sprintf("argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
+		memory,
+		iterations,
+		parallelism,
+		base64.RawStdEncoding.EncodeToString(salt),
+		base64.RawStdEncoding.EncodeToString(hash),
+	), nil
+}
+
+func verifyPassword(password, encodedHash string) bool {
+	parts := strings.Split(encodedHash, "$")
+	if len(parts) != 6 || parts[0] != "argon2id" {
+		return false
+	}
+
+	var memory, iterations, parallelism uint32
+	if _, err := fmt.Sscanf(parts[2], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false
+	}
+	decodedHash, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil {
+		return false
+	}
+
+	calc := argon2.IDKey(
+		[]byte(password+passwordPepper),
+		salt,
+		iterations,
+		memory,
+		uint8(parallelism),
+		uint32(len(decodedHash)),
+	)
+	return subtle.ConstantTimeCompare(decodedHash, calc) == 1
+}
+
+// initSigningKeys() replaced by keymanagement.KeyStore initialization
+
+// generateSigningKey() replaced by keymanagement.KeyStore.generateSigningKey()
+
+func buildJWK(kid string, pubKey *rsa.PublicKey) map[string]string {
+	if pubKey == nil {
+		return map[string]string{}
+	}
+	n := base64.RawURLEncoding.EncodeToString(pubKey.N.Bytes())
+	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pubKey.E)).Bytes())
+	return map[string]string{
+		"kty": "RSA",
+		"kid": kid,
+		"alg": jwt.SigningMethodRS256.Name,
+		"use": "sig",
+		"n":   n,
+		"e":   e,
+	}
+}
+
+func jwksHandler(w http.ResponseWriter, r *http.Request) {
+	publicKeys := keyStore.GetPublicKeys()
+	keys := make([]map[string]string, 0, len(publicKeys))
+
+	for _, key := range publicKeys {
+		pubKey, err := key.DecodePublicKey()
+		if err != nil {
+			log.Printf("failed to decode public key %s: %v", key.Kid, err)
+			continue
+		}
+		jwk := buildJWK(key.Kid, pubKey)
+		keys = append(keys, jwk)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"keys": keys})
+}
+
+func publicKeyPEMHandler(w http.ResponseWriter, r *http.Request) {
+	signingKey := keyStore.GetSigningKey()
+	if signingKey == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "public key unavailable"})
+		return
+	}
+
+	pk, err := signingKey.DecodePublicKey()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "public key decoding failed"})
+		return
+	}
+
+	der, err := x509.MarshalPKIXPublicKey(pk)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "public key encoding failed"})
+		return
+	}
+
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(pemBytes)
 }
 
 // ── Redis session (optional) ──────────────────
@@ -162,6 +370,162 @@ func initRedis() *redis.Client {
 	}
 	log.Printf("Redis connected at %s", addr)
 	return rdb
+}
+
+// ── OIDC/Federation Handlers ──────────────────
+
+// federationAuthorizeHandler initiates OAuth2 Authorization Code flow with PKCE
+func federationAuthorizeHandler(w http.ResponseWriter, r *http.Request) {
+	if !oidcEnabled || oauth2Client == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "federation not enabled"})
+		return
+	}
+
+	// Generate PKCE challenge and state
+	verifier, challenge, err := oidc.PKCEChallenge()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate PKCE challenge"})
+		return
+	}
+
+	state, err := oidc.State()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate state"})
+		return
+	}
+
+	// Store state and verifier for callback validation (expires in 10 minutes)
+	oidcStateMu.Lock()
+	oidcStateMap[state] = &oidcSessionState{
+		Verifier:  verifier,
+		Timestamp: time.Now().Add(10 * time.Minute),
+	}
+	oidcStateMu.Unlock()
+
+	// Generate authorization URL
+	authURL, err := oauth2Client.AuthorizationURL(state, challenge)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to build authorization URL"})
+		return
+	}
+
+	// Redirect to IdP
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// federationCallbackHandler processes OAuth2 authorization code callback
+func federationCallbackHandler(w http.ResponseWriter, r *http.Request) {
+	if !oidcEnabled || oauth2Client == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "federation not enabled"})
+		return
+	}
+
+	// Parse callback query parameters
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+	errParam := r.URL.Query().Get("error")
+
+	if errParam != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "authorization denied",
+			"error_description": r.URL.Query().Get("error_description"),
+		})
+		return
+	}
+
+	if code == "" || state == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing code or state"})
+		return
+	}
+
+	// Validate state and retrieve verifier
+	oidcStateMu.RLock()
+	sessionState, found := oidcStateMap[state]
+	oidcStateMu.RUnlock()
+
+	if !found {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid state"})
+		return
+	}
+
+	// Check if state is expired
+	if time.Now().After(sessionState.Timestamp) {
+		oidcStateMu.Lock()
+		delete(oidcStateMap, state)
+		oidcStateMu.Unlock()
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "state expired"})
+		return
+	}
+
+	// Exchange code for token
+	tokenResp, err := oauth2Client.ExchangeCodeForToken(code, sessionState.Verifier)
+	if err != nil {
+		log.Printf("token exchange failed: %v", err)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "token exchange failed"})
+		return
+	}
+
+	// Get user info from IdP
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	userInfo, err := oauth2Client.GetUserInfo(ctx, tokenResp.AccessToken)
+	if err != nil {
+		log.Printf("failed to get user info: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to retrieve user info"})
+		return
+	}
+
+	// Map IdP claims to internal roles
+	mapped := claimMapper.MapClaims(userInfo)
+
+	// Validate user meets organizational policies
+	if err := claimMapper.ValidateUser(mapped); err != nil {
+		log.Printf("user validation failed for %s: %v", userInfo.Email, err)
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error":  "user validation failed",
+			"reason": err.Error(),
+		})
+		return
+	}
+
+	// Create internal user from mapped claims
+	internalUser := &User{
+		UserID:   randomHex(16),
+		Username: mapped.Username,
+		Role:     mapped.Role,
+		PassHash: "", // Federation users don't have password hashes
+	}
+
+	usersMu.Lock()
+	users[internalUser.UserID] = internalUser
+	usersMu.Unlock()
+
+	// Issue platform token with mapped claims
+	token, err := issueToken(internalUser, tokenTTL)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token issuance failed"})
+		return
+	}
+
+	// Clean up state
+	oidcStateMu.Lock()
+	delete(oidcStateMap, state)
+	oidcStateMu.Unlock()
+
+	// Return token to client
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"access_token": token,
+		"token_type":   "Bearer",
+		"expires_in":   int(tokenTTL.Seconds()),
+		"user": map[string]interface{}{
+			"uid":      internalUser.UserID,
+			"username": internalUser.Username,
+			"email":    mapped.Email,
+			"role":     internalUser.Role,
+			"groups":   mapped.Groups,
+		},
+	})
 }
 
 // ── Handlers ──────────────────────────────────
@@ -186,7 +550,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	usersMu.RLock()
 	user, ok := users[req.Username]
 	usersMu.RUnlock()
-	if !ok || user.PassHash != sha256hex(req.Password) {
+	if !ok || !verifyPassword(req.Password, user.PassHash) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
@@ -268,9 +632,9 @@ func listUsersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /auth/.well-known/openid-configuration
-func openIDConfigHandler(port string) http.HandlerFunc {
+func openIDConfigHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		base := fmt.Sprintf("http://localhost:%s", port)
+		base := authIssuer
 		writeJSON(w, http.StatusOK, map[string]string{
 			"issuer":                 base,
 			"authorization_endpoint": base + "/auth/authorize",
@@ -285,7 +649,37 @@ func openIDConfigHandler(port string) http.HandlerFunc {
 
 func main() {
 	port := env("ACCESS_CONTROL_PORT", "8002")
+	if err := initUsers(); err != nil {
+		log.Fatalf("failed to initialize users: %v", err)
+	}
+	var err error
+	keyStore, err = keymanagement.NewKeyStore(keysDir, keyRotationPeriod, keyLifetime)
+	if err != nil {
+		log.Fatalf("failed to initialize key store: %v", err)
+	}
+	keyStore.StartRotationScheduler()
 	initRedis()
+
+	// Initialize OIDC/Federation if enabled
+	if oidcEnabled {
+		if oidcProviderURL == "" || oidcClientID == "" || oidcClientSecret == "" {
+			log.Fatalf("OIDC enabled but missing configuration: provider_url, client_id, or client_secret")
+		}
+		cfg := &oidc.ProviderConfig{
+			ProviderURL:  oidcProviderURL,
+			ClientID:     oidcClientID,
+			ClientSecret: oidcClientSecret,
+			RedirectURI:  oidcRedirectURI,
+			Scopes:       []string{"openid", "profile", "email", "groups"},
+		}
+		oc, err := oidc.NewOAuth2Client(cfg)
+		if err != nil {
+			log.Fatalf("failed to initialize OIDC client: %v", err)
+		}
+		oauth2Client = oc
+		claimMapper = oidc.NewClaimMapper(oidcGroupRoleMap, nil, "viewer")
+		log.Printf("OIDC/Federation enabled for provider: %s", oidcProviderURL)
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -307,11 +701,18 @@ func main() {
 		sessionsMu.RLock()
 		activeSessions := len(sessions)
 		sessionsMu.RUnlock()
+		var kid, keyStatus string
+		if signingKey := keyStore.GetSigningKey(); signingKey != nil {
+			kid = signingKey.Kid
+			keyStatus = signingKey.Status
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status":           "healthy",
-			"service":          "access-control",
-			"version":          "2.0.0-pqc",
-			"active_sessions":  activeSessions,
+			"status":          "healthy",
+			"service":         "access-control",
+			"version":         "2.1.0",
+			"active_sessions": activeSessions,
+			"signing_kid":     kid,
+			"key_status":      keyStatus,
 		})
 	})
 	r.Handle("/metrics", promhttp.Handler())
@@ -321,7 +722,15 @@ func main() {
 	r.Get("/auth/verify", verifyHandler)
 	r.Post("/auth/logout", logoutHandler)
 	r.Get("/auth/users", listUsersHandler)
-	r.Get("/auth/.well-known/openid-configuration", openIDConfigHandler(port))
+	r.Get("/auth/.well-known/openid-configuration", openIDConfigHandler())
+	r.Get("/auth/.well-known/jwks.json", jwksHandler)
+	r.Get("/auth/public-key.pem", publicKeyPEMHandler)
+
+	// OIDC/Federation routes
+	if oidcEnabled {
+		r.Get("/auth/federation/authorize", federationAuthorizeHandler)
+		r.Get("/auth/federation/callback", federationCallbackHandler)
+	}
 
 	// Legacy stubs — now functional
 	r.Post("/auth/authorize", func(w http.ResponseWriter, req *http.Request) {
@@ -333,8 +742,8 @@ func main() {
 		loginHandler(w, req) // delegate to login
 	})
 
-	log.Printf("Access Control Service (Zero-Trust + JWT) starting on :%s", port)
-	log.Printf("Default users: admin/admin123, analyst/analyst123, viewer/viewer123")
+	log.Printf("Access Control Service (Zero-Trust + JWT + OIDC Federation) starting on :%s", port)
+	log.Printf("Default users initialized: admin, analyst, viewer")
 	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), r); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
