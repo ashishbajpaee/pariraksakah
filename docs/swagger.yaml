@@ -1,0 +1,993 @@
+openapi: 3.0.3
+info:
+  title: Pariraksakah Backend API
+  version: 1.0.0
+  description: |
+    Swagger/OpenAPI documentation for backend APIs exposed by the API Gateway.
+
+    Notes:
+    - Public endpoints are available without JWT.
+    - Protected endpoints require Bearer JWT unless otherwise stated.
+    - Several protected routes are proxy pass-through routes to internal services.
+servers:
+  - url: http://localhost:8080
+    description: Local API Gateway
+
+tags:
+  - name: Health
+  - name: Dashboard
+  - name: Rollout
+  - name: Auth
+  - name: Phishing
+  - name: Threats
+  - name: WebSocket
+  - name: Protected Proxy
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Gateway health
+      responses:
+        '200':
+          description: Gateway is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags: [Health]
+      summary: Gateway readiness and upstream checks
+      responses:
+        '200':
+          description: Readiness status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Prometheus metrics
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /ws/events:
+    get:
+      tags: [WebSocket]
+      summary: WebSocket event stream upgrade endpoint
+      description: HTTP endpoint upgraded to WebSocket for real-time events.
+      responses:
+        '101':
+          description: Switching Protocols
+        '400':
+          description: Upgrade failed
+
+  /api/v1/dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Aggregated live dashboard metrics
+      responses:
+        '200':
+          description: Dashboard payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+
+  /api/v1/alerts:
+    get:
+      tags: [Dashboard]
+      summary: Live alerts feed
+      responses:
+        '200':
+          description: Alert feed payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertsResponse'
+
+  /api/v1/infra/pods/ttl:
+    get:
+      tags: [Dashboard]
+      summary: Ephemeral pod age and TTL snapshot
+      responses:
+        '200':
+          description: Pod TTL payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PodsTTLResponse'
+
+  /api/v1/rollout/alerts:
+    get:
+      tags: [Rollout]
+      summary: Alert rollout mode status
+      responses:
+        '200':
+          description: Rollout status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolloutStatusResponse'
+
+  /api/v1/admin/rollout/alerts:
+    post:
+      tags: [Rollout]
+      summary: Update alert rollout mode
+      description: |
+        Updates alert mode between live and synthetic.
+        If rollout admin token is configured, provide X-Rollout-Token header.
+      security:
+        - RolloutToken: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RolloutUpdateRequest'
+      responses:
+        '200':
+          description: Rollout mode updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolloutUpdateResponse'
+        '400':
+          description: Invalid request body
+        '401':
+          description: Invalid rollout token
+        '403':
+          description: Rollout update blocked by environment guardrails
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login (public gateway route)
+      description: Proxied to access-control service auth login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Login response from access-control
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/auth/verify:
+    post:
+      tags: [Auth]
+      summary: Verify token (public gateway route)
+      description: Proxied to access-control service auth verify.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Verification response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/phishing/check/url:
+    post:
+      tags: [Phishing]
+      summary: Public URL phishing check
+      description: Proxied to anti-phishing analyze URL endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: URL analysis response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/phishing/check/email:
+    post:
+      tags: [Phishing]
+      summary: Public email phishing check
+      description: Proxied to anti-phishing analyze email endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Email analysis response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/threats/recent:
+    get:
+      tags: [Threats]
+      summary: Recent threats (public gateway route)
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+      responses:
+        '200':
+          description: Recent threats response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Legacy login route
+      description: Public access-control proxy route.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Auth response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /auth/token:
+    post:
+      tags: [Auth]
+      summary: Legacy token route
+      description: Public access-control proxy route.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Token response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Legacy refresh route
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Refresh response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /auth/.well-known/openid-configuration:
+    get:
+      tags: [Auth]
+      summary: OIDC discovery
+      responses:
+        '200':
+          description: OIDC metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /auth/.well-known/jwks.json:
+    get:
+      tags: [Auth]
+      summary: JSON Web Key Set
+      responses:
+        '200':
+          description: JWKS document
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/innovations/status:
+    get:
+      tags: [Protected Proxy]
+      summary: Aggregated innovation status
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Innovation statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InnovationStatus'
+        '401':
+          description: Missing or invalid JWT
+        '403':
+          description: Access denied by authorization middleware
+
+  /api/v1/threats/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for threat-detection proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Threat-detection proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: Threat-detection proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/alerts/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for threat-detection alerts proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Alerts proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: Alerts proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/phishing/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for anti-phishing proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Anti-phishing proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: Anti-phishing proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/soar/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for incident-response proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: SOAR proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: SOAR proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/incidents/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for incidents proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Incidents proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: Incidents proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/bio-auth/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for bio-auth proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Bio-auth proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: Bio-auth proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/swarm/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for swarm-agent proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Swarm proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/cognitive-firewall/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for cognitive-firewall proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Cognitive firewall proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: Cognitive firewall proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/dream/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for threat-detection dream proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Dream proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/self-healing/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for self-healing proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Self-healing proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Protected Proxy]
+      summary: Self-healing proxy POST
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /api/v1/satellite/{path}:
+    parameters:
+      - in: path
+        name: path
+        required: true
+        schema:
+          type: string
+        description: URL-encoded downstream path segment for satellite-link proxy.
+    get:
+      tags: [Protected Proxy]
+      summary: Satellite proxy GET
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Proxied response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    RolloutToken:
+      type: apiKey
+      in: header
+      name: X-Rollout-Token
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+        service:
+          type: string
+          example: api-gateway
+        version:
+          type: string
+          example: 1.0.0
+        time:
+          type: string
+          format: date-time
+      required: [status, service, version]
+
+    ReadyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ready
+        services:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [healthy, unhealthy]
+      required: [status, services]
+
+    DashboardResponse:
+      type: object
+      properties:
+        total_events_24h:
+          type: integer
+        active_threats:
+          type: integer
+        blocked_attacks:
+          type: integer
+        mean_detect_time_ms:
+          type: integer
+        healthy_services:
+          type: integer
+        total_services:
+          type: integer
+        alerts_by_severity:
+          type: object
+          additionalProperties:
+            type: integer
+        top_attack_types:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              count:
+                type: integer
+        services:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              status:
+                type: string
+              latency_ms:
+                type: integer
+      required:
+        - total_events_24h
+        - active_threats
+        - blocked_attacks
+        - mean_detect_time_ms
+        - alerts_by_severity
+        - top_attack_types
+
+    AlertItem:
+      type: object
+      properties:
+        id:
+          type: string
+        severity:
+          type: string
+        type:
+          type: string
+        source_ip:
+          type: string
+        destination_ip:
+          type: string
+        description:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        mitre_technique:
+          type: string
+        campaign_id:
+          type: string
+        kill_chain_stage:
+          type: string
+        campaign_risk_score:
+          type: number
+        status:
+          type: string
+        confidence:
+          type: number
+        source:
+          type: string
+
+    AlertsResponse:
+      type: object
+      properties:
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertItem'
+        total:
+          type: integer
+        is_live:
+          type: boolean
+        degraded:
+          type: boolean
+        rollout_mode:
+          type: string
+          enum: [live, synthetic]
+        generated_at:
+          type: string
+          format: date-time
+      required: [alerts, total, is_live, degraded, rollout_mode, generated_at]
+
+    PodsTTLResponse:
+      type: object
+      properties:
+        source:
+          type: string
+          example: kubernetes
+        namespace:
+          type: string
+        ttl_sec_default:
+          type: integer
+        generated_at:
+          type: string
+          format: date-time
+        pods:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              namespace:
+                type: string
+              phase:
+                type: string
+              age_sec:
+                type: integer
+              ttl_sec:
+                type: integer
+              remaining_sec:
+                type: integer
+              ephemeral:
+                type: boolean
+
+    RolloutStatusResponse:
+      type: object
+      properties:
+        alerts_mode:
+          type: string
+          enum: [live, synthetic]
+        deploy_env:
+          type: string
+        synthetic_fallback_allowed:
+          type: boolean
+      required: [alerts_mode, deploy_env, synthetic_fallback_allowed]
+
+    RolloutUpdateRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [live, synthetic]
+        reason:
+          type: string
+        force:
+          type: boolean
+      required: [mode]
+
+    RolloutUpdateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        alerts_mode:
+          type: string
+          enum: [live, synthetic]
+        previous:
+          type: string
+          enum: [live, synthetic]
+        deploy_env:
+          type: string
+      required: [status, alerts_mode, previous, deploy_env]
+
+    InnovationStatus:
+      type: object
+      properties:
+        name:
+          type: string
+        prompt:
+          type: string
+        status:
+          type: string
+          enum: [active, degraded, offline]
+      required: [name, prompt, status]

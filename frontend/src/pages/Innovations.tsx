@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 // ── Types ──────────────────────────────────────
 
@@ -10,6 +10,14 @@ interface Innovation {
   metrics: { label: string; value: string }[];
   prompt: string;
 }
+
+type InnovationStatusResponse = {
+  name: string;
+  prompt: string;
+  status: 'active' | 'degraded' | 'offline';
+};
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1';
 
 // ── Mock Data ──────────────────────────────────
 
@@ -129,8 +137,40 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; dot: string }> =
 // ── Component ──────────────────────────────────
 
 export default function Innovations() {
-  const activeCount = INNOVATIONS.filter((i) => i.status === 'active').length;
-  const degradedCount = INNOVATIONS.filter((i) => i.status === 'degraded').length;
+  const [items, setItems] = useState<Innovation[]>(INNOVATIONS);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchInnovationStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/innovations/status`);
+        if (!res.ok) return;
+        const data: InnovationStatusResponse[] = await res.json();
+        if (cancelled) return;
+
+        const statusByName = new Map(data.map((entry) => [entry.name, entry.status]));
+        setItems(
+          INNOVATIONS.map((innovation) => ({
+            ...innovation,
+            status: statusByName.get(innovation.name) ?? innovation.status,
+          })),
+        );
+      } catch {
+        // Keep static defaults when gateway status endpoint is unavailable.
+      }
+    };
+
+    fetchInnovationStatus();
+    const interval = setInterval(fetchInnovationStatus, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const activeCount = items.filter((i) => i.status === 'active').length;
+  const degradedCount = items.filter((i) => i.status === 'degraded').length;
 
   return (
     <div className="space-y-6">
@@ -138,7 +178,7 @@ export default function Innovations() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold">8 Breakthrough Innovations</h1>
-          <p className="text-gray-500 text-sm mt-1">
+          <p className="text-slate-500 text-sm mt-1">
             Real-time status of Parirakṣakaḥ&apos;s unique defense capabilities
           </p>
         </div>
@@ -152,23 +192,23 @@ export default function Innovations() {
 
       {/* Innovation Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {INNOVATIONS.map((innovation) => {
+        {items.map((innovation) => {
           const style = STATUS_STYLES[innovation.status];
           return (
             <div
               key={innovation.id}
-              className="card hover:border-[#6C63FF]/50 transition-colors group"
+              className="card hover:border-[#517EF9]/40 transition-colors group"
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#6C63FF]/20 flex items-center justify-center flex-shrink-0">
-                    <span className="text-xs font-bold text-[#6C63FF]">{innovation.prompt}</span>
+                  <div className="w-8 h-8 rounded-lg bg-[#517EF9]/15 flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs font-bold text-[#517EF9]">{innovation.prompt}</span>
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-100 group-hover:text-[#6C63FF] transition-colors">
+                    <h3 className="font-semibold text-slate-800 group-hover:text-[#517EF9] transition-colors">
                       {innovation.name}
                     </h3>
-                    <span className="text-xs text-gray-500">{innovation.prompt}</span>
+                    <span className="text-xs text-slate-500">{innovation.prompt}</span>
                   </div>
                 </div>
                 <span
@@ -179,17 +219,17 @@ export default function Innovations() {
                 </span>
               </div>
 
-              <p className="text-sm text-gray-400 mb-4">{innovation.description}</p>
+              <p className="text-sm text-slate-600 mb-4">{innovation.description}</p>
 
               {/* Metrics Grid */}
               <div className="grid grid-cols-2 gap-2">
                 {innovation.metrics.map((m) => (
                   <div
                     key={m.label}
-                    className="bg-[#0F172A] rounded-lg px-3 py-2"
+                    className="bg-[#F2F6FF] rounded-lg px-3 py-2 border border-[#DFE8FA]"
                   >
-                    <div className="text-lg font-bold text-[#6C63FF]">{m.value}</div>
-                    <div className="text-xs text-gray-500">{m.label}</div>
+                    <div className="text-lg font-bold text-[#517EF9]">{m.value}</div>
+                    <div className="text-xs text-slate-500">{m.label}</div>
                   </div>
                 ))}
               </div>

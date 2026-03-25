@@ -71,7 +71,7 @@ function generateTimeline() {
 const NODE_COLORS: Record<string, string> = {
   campaign: '#EF4444',
   technique: '#F59E0B',
-  ip: '#6C63FF',
+  ip: '#517EF9',
   domain: '#10B981',
   hash: '#EC4899',
 };
@@ -97,7 +97,7 @@ export default function ThreatHunting() {
       {/* Search Bar */}
       <div className="card">
         <div className="flex items-center gap-4">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-gray-400 flex-shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-slate-400 flex-shrink-0">
             <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.8"/>
             <path d="m21 21-4.35-4.35" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
           </svg>
@@ -106,9 +106,9 @@ export default function ThreatHunting() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search IPs, domains, hashes, MITRE techniques, campaigns..."
-            className="flex-1 bg-transparent border-none outline-none text-gray-100 placeholder-gray-500 text-sm"
+            className="flex-1 bg-transparent border-none outline-none text-slate-800 placeholder-slate-400 text-sm"
           />
-          <button className="px-4 py-2 bg-[#6C63FF] text-white rounded-lg text-sm font-medium hover:bg-[#5B54E6] transition-colors">
+          <button className="px-4 py-2 bg-[#517EF9] text-white rounded-lg text-sm font-medium hover:bg-[#436FE8] transition-colors">
             Hunt
           </button>
         </div>
@@ -129,7 +129,7 @@ export default function ThreatHunting() {
                 markerHeight="6"
                 orient="auto-start-reverse"
               >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#A1B4D8" />
               </marker>
             </defs>
 
@@ -151,7 +151,7 @@ export default function ThreatHunting() {
                     y1={sy}
                     x2={tx}
                     y2={ty}
-                    stroke="#475569"
+                    stroke="#B8C7E6"
                     strokeWidth={1.5}
                     markerEnd="url(#arrowhead)"
                   />
@@ -185,7 +185,7 @@ export default function ThreatHunting() {
                     cx={cx}
                     cy={cy}
                     r={isSelected ? 22 : 18}
-                    fill={NODE_COLORS[node.type] || '#6C63FF'}
+                    fill={NODE_COLORS[node.type] || '#517EF9'}
                     opacity={0.8}
                     stroke={isSelected ? '#fff' : 'transparent'}
                     strokeWidth={2}
@@ -193,7 +193,7 @@ export default function ThreatHunting() {
                   <text
                     x={cx}
                     y={cy + 32}
-                    fill="#CBD5E1"
+                    fill="#475569"
                     fontSize="10"
                     textAnchor="middle"
                   >
@@ -207,7 +207,7 @@ export default function ThreatHunting() {
           </svg>
 
           {/* Legend */}
-          <div className="flex flex-wrap gap-3 mt-3 text-xs text-gray-400">
+          <div className="flex flex-wrap gap-3 mt-3 text-xs text-slate-500">
             {Object.entries(NODE_COLORS).map(([type, color]) => (
               <span key={type} className="flex items-center gap-1">
                 <span className="w-3 h-3 rounded-full" style={{ background: color }} />
@@ -233,10 +233,10 @@ export default function ThreatHunting() {
                   {selectedNode.type.toUpperCase()}
                 </span>
               </div>
-              <h3 className="text-lg font-semibold break-all">{selectedNode.label}</h3>
+              <h3 className="text-lg font-semibold break-all text-slate-800">{selectedNode.label}</h3>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">Severity:</span>
-                <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+                <span className="text-xs text-slate-500">Severity:</span>
+                <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
                   <div
                     className="h-full rounded-full"
                     style={{
@@ -254,8 +254,8 @@ export default function ThreatHunting() {
                   {(selectedNode.severity * 100).toFixed(0)}%
                 </span>
               </div>
-              <div className="text-sm text-gray-400 mt-4">
-                <p className="font-medium text-gray-300 mb-2">Connected Entities:</p>
+              <div className="text-sm text-slate-600 mt-4">
+                <p className="font-medium text-slate-700 mb-2">Connected Entities:</p>
                 {graph.edges
                   .filter(
                     (e) =>
@@ -268,7 +268,7 @@ export default function ThreatHunting() {
                     return (
                       <div
                         key={i}
-                        className="flex items-center gap-2 py-1 border-b border-gray-700/50"
+                        className="flex items-center gap-2 py-1 border-b border-slate-200"
                       >
                         <span
                           className="w-2 h-2 rounded-full"
@@ -277,7 +277,7 @@ export default function ThreatHunting() {
                           }}
                         />
                         <span className="text-xs">{other?.label}</span>
-                        <span className="text-xs text-gray-600 ml-auto">
+                        <span className="text-xs text-slate-500 ml-auto">
                           {e.relation}
                         </span>
                       </div>
@@ -286,7 +286,7 @@ export default function ThreatHunting() {
               </div>
             </div>
           ) : (
-            <p className="text-gray-500 text-sm">Click a node to view details</p>
+            <p className="text-slate-500 text-sm">Click a node to view details</p>
           )}
         </div>
 
@@ -295,13 +295,13 @@ export default function ThreatHunting() {
           <div className="card-header">Threat Activity Timeline (24h)</div>
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={timeline}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="time" tick={{ fill: '#94A3B8', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#94A3B8', fontSize: 11 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#D8E3F7" />
+              <XAxis dataKey="time" tick={{ fill: '#64748B', fontSize: 10 }} />
+              <YAxis tick={{ fill: '#64748B', fontSize: 11 }} />
               <Tooltip
                 contentStyle={{
-                  background: '#1E293B',
-                  border: '1px solid #334155',
+                  background: '#FFFFFF',
+                  border: '1px solid #D8E3F7',
                   borderRadius: 8,
                 }}
               />

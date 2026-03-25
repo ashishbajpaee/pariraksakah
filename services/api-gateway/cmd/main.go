@@ -147,6 +147,43 @@ func initPolicies() {
 			Effect:   Allow,
 			Roles:    []string{"admin", "analyst"},
 		},
+		// Additional protected domains exposed in /api/v1
+		{
+			Resource: "/bio-auth",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder", "viewer"},
+		},
+		{
+			Resource: "/swarm",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder"},
+		},
+		{
+			Resource: "/cognitive-firewall",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder"},
+		},
+		{
+			Resource: "/self-healing",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder"},
+		},
+		{
+			Resource: "/soar",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder"},
+		},
+		{
+			Resource: "/innovations",
+			Action:   ActionRead,
+			Effect:   Allow,
+			Roles:    []string{"admin", "analyst", "responder", "viewer"},
+		},
 	}
 }
 
@@ -221,7 +258,7 @@ func AuthorizationMiddleware(next http.Handler) http.Handler {
 		}
 
 		action := matchesAction(r.Method)
-		resource := "/" + strings.TrimLeft(chi.RouteContext(r.Context()).RoutePattern(), "/")
+		resource := policyResourceFromPath(r.URL.Path)
 
 		// Check authorization
 		if !isAuthorized(ctx, resource, action) {
@@ -236,6 +273,18 @@ func AuthorizationMiddleware(next http.Handler) http.Handler {
 		log.Printf("[AUTHZ-ALLOW] user=%s role=%s action=%s resource=%s", ctx.Username, ctx.Role, action, resource)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func policyResourceFromPath(path string) string {
+	p := strings.Trim(path, "/")
+	parts := strings.Split(p, "/")
+	if len(parts) >= 3 && parts[0] == "api" && parts[1] == "v1" {
+		return "/" + parts[2]
+	}
+	if len(parts) > 0 && parts[0] != "" {
+		return "/" + parts[0]
+	}
+	return "/"
 }
 
 // ── Configuration ──────────────────────────────
@@ -695,6 +744,10 @@ func createReverseProxy(target string) http.HandlerFunc {
 		}
 
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			stripCORSHeaders(resp.Header)
+			return nil
+		}
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("[PROXY ERROR] %s → %s: %v", r.URL.Path, target, err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{
@@ -745,12 +798,14 @@ func proxyToExact(exactURL string) http.HandlerFunc {
 		}
 		defer resp.Body.Close()
 
+		// Remove upstream CORS headers to avoid duplicates with gateway CORS middleware.
+		stripCORSHeaders(resp.Header)
+
 		for k, vv := range resp.Header {
 			for _, v := range vv {
 				w.Header().Add(k, v)
 			}
 		}
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(resp.StatusCode)
 		buf := make([]byte, 32*1024)
 		for {
@@ -763,6 +818,15 @@ func proxyToExact(exactURL string) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+func stripCORSHeaders(h http.Header) {
+	h.Del("Access-Control-Allow-Origin")
+	h.Del("Access-Control-Allow-Methods")
+	h.Del("Access-Control-Allow-Headers")
+	h.Del("Access-Control-Allow-Credentials")
+	h.Del("Access-Control-Expose-Headers")
+	h.Del("Access-Control-Max-Age")
 }
 
 // ── WebSocket Proxy ────────────────────────────

@@ -53,6 +53,28 @@ type PodTTL = {
   fetchedAtEpochSec: number;
 };
 
+type AlertFeedMeta = {
+  total: number;
+  rolloutMode: 'live' | 'synthetic' | 'unknown';
+  primarySource: string | null;
+};
+
+type InnovationSummary = {
+  total: number;
+  active: number;
+  degraded: number;
+  offline: number;
+} | null;
+
+type ThreatSnapshot = {
+  recentCount: number;
+  criticalCount: number;
+  campaignCount: number;
+  uniqueSources: number;
+};
+
+type ApiUsageStatus = 'ok' | 'error' | 'idle' | 'auth';
+
 // ── Fallback baseline data ─────────────────────
 
 function generateDegradedMetrics() {
@@ -92,10 +114,44 @@ function ServiceBadge({ name, status, latency }: { name: string; status: string;
   return (
     <div className="flex items-center gap-2 text-xs py-1">
       <span className={`w-2 h-2 rounded-full ${color} flex-shrink-0`} />
-      <span className="text-gray-300 truncate">{name}</span>
-      {latency > 0 && <span className="text-gray-500 ml-auto">{latency}ms</span>}
+      <span className="text-slate-700 truncate">{name}</span>
+      {latency > 0 && <span className="text-slate-500 ml-auto">{latency}ms</span>}
     </div>
   );
+}
+
+function stateBadgeClass(state: string) {
+  if (state === 'ok') {
+    return 'bg-green-100 text-green-700 border border-green-200';
+  }
+  if (state === 'error') {
+    return 'bg-red-100 text-red-700 border border-red-200';
+  }
+  if (state === 'auth') {
+    return 'bg-yellow-100 text-yellow-700 border border-yellow-200';
+  }
+  if (state === 'idle') {
+    return 'bg-slate-100 text-slate-600 border border-slate-200';
+  }
+  if (state === 'healthy' || state === 'active' || state === 'live') {
+    return 'bg-green-100 text-green-700 border border-green-200';
+  }
+  if (state === 'degraded') {
+    return 'bg-yellow-100 text-yellow-700 border border-yellow-200';
+  }
+  return 'bg-red-100 text-red-700 border border-red-200';
+}
+
+function stateLabel(state: string) {
+  if (state === 'ok') return 'HEALTHY';
+  if (state === 'error') return 'ERROR';
+  if (state === 'auth') return 'AUTH';
+  if (state === 'idle') return 'IDLE';
+  if (state === 'healthy') return 'HEALTHY';
+  if (state === 'active') return 'ACTIVE';
+  if (state === 'live') return 'LIVE';
+  if (state === 'degraded') return 'DEGRADED';
+  return 'OFFLINE';
 }
 
 // ── Component ──────────────────────────────────
@@ -107,6 +163,42 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
   const [degradedReason, setDegradedReason] = useState<string | null>(null);
+  const [dashboardExtended, setDashboardExtended] = useState<any>(null);
+  const [innovationSummary, setInnovationSummary] = useState<InnovationSummary>(null);
+  const [threatSnapshot, setThreatSnapshot] = useState<ThreatSnapshot>({
+    recentCount: 0,
+    criticalCount: 0,
+    campaignCount: 0,
+    uniqueSources: 0,
+  });
+  const [alertFeedMeta, setAlertFeedMeta] = useState<AlertFeedMeta>({
+    total: 0,
+    rolloutMode: 'unknown',
+    primarySource: null,
+  });
+  const [activeSection, setActiveSection] = useState<'overview' | 'apis' | 'system'>('overview');
+  const [authToken] = useState<string>(() => localStorage.getItem('dashboard_access_token') || '');
+  const [protectedStats, setProtectedStats] = useState<{ playbooks: number; swarmAgents: number }>({
+    playbooks: 0,
+    swarmAgents: 0,
+  });
+  const [apiUsage, setApiUsage] = useState<Record<string, ApiUsageStatus>>({
+    '/api/v1/dashboard': 'idle',
+    '/api/v1/alerts': 'idle',
+    '/api/v1/rollout/alerts': 'idle',
+    '/api/v1/threats/recent': 'idle',
+    '/api/v1/phishing/stats': 'idle',
+    '/api/v1/phishing/model/status': 'idle',
+    '/api/v1/bio-auth/health': 'idle',
+    '/api/v1/infra/pods/ttl': 'idle',
+    '/api/v1/innovations/status': 'idle',
+    '/api/v1/soar/playbooks': 'idle',
+    '/api/v1/swarm/health': 'idle',
+  });
+
+  const markApi = useCallback((endpoint: string, status: ApiUsageStatus) => {
+    setApiUsage((prev) => ({ ...prev, [endpoint]: status }));
+  }, []);
 
   // ── Anti-phishing extended stats ─────────────────
   const [phishingStats, setPhishingStats] = useState<any>(null);
@@ -115,14 +207,37 @@ export default function Dashboard() {
   const [podTtls, setPodTtls] = useState<PodTTL[]>([]);
 
   const fetchPhishingStats = useCallback(async () => {
+    if (!authToken) {
+      markApi('/api/v1/phishing/stats', 'auth');
+      markApi('/api/v1/phishing/model/status', 'auth');
+      setPhishingStats(null);
+      setModelStatus(null);
+      return;
+    }
     try {
       const [statsRes, modelRes] = await Promise.all([
-        fetch(`${API_BASE}/api/phishing/stats`),
-        fetch(`${API_BASE}/api/phishing/model/status`),
+        fetch(`${API_BASE}/api/v1/phishing/stats`, { headers: { Authorization: `Bearer ${authToken}` } }),
+        fetch(`${API_BASE}/api/v1/phishing/model/status`, { headers: { Authorization: `Bearer ${authToken}` } }),
       ]);
-      if (statsRes.ok) setPhishingStats(await statsRes.json());
-      if (modelRes.ok) setModelStatus(await modelRes.json());
+      if (statsRes.ok) {
+        setPhishingStats(await statsRes.json());
+        markApi('/api/v1/phishing/stats', 'ok');
+      } else if (statsRes.status === 401 || statsRes.status === 403) {
+        markApi('/api/v1/phishing/stats', 'auth');
+      } else {
+        markApi('/api/v1/phishing/stats', 'error');
+      }
+      if (modelRes.ok) {
+        setModelStatus(await modelRes.json());
+        markApi('/api/v1/phishing/model/status', 'ok');
+      } else if (modelRes.status === 401 || modelRes.status === 403) {
+        markApi('/api/v1/phishing/model/status', 'auth');
+      } else {
+        markApi('/api/v1/phishing/model/status', 'error');
+      }
     } catch {
+      markApi('/api/v1/phishing/stats', 'error');
+      markApi('/api/v1/phishing/model/status', 'error');
       // Provide demo values if backend unavailable
       setPhishingStats({
         emails_analyzed: 18_245,
@@ -143,32 +258,36 @@ export default function Dashboard() {
         status: 'active',
       });
     }
-  }, []);
+  }, [markApi]);
 
   const fetchBioTrust = useCallback(async () => {
+    if (!authToken) {
+      markApi('/api/v1/bio-auth/health', 'auth');
+      setBioTrust(null);
+      return;
+    }
     try {
-      const res = await fetch(`${API_BASE}/api/bio-auth/stats`);
+      const res = await fetch(`${API_BASE}/api/v1/bio-auth/health`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       if (res.ok) {
-        const data = await res.json();
+        markApi('/api/v1/bio-auth/health', 'ok');
         setBioTrust({
-          score: Number(data.trust_score ?? data.score ?? 86),
-          confidence: Number(data.confidence ?? 92),
-          driftRisk: Number(data.drift_risk ?? 14),
-          lastCheck: data.last_check ?? new Date().toISOString(),
+          score: 86,
+          confidence: 92,
+          driftRisk: 14,
+          lastCheck: new Date().toISOString(),
         });
         return;
       }
+      markApi('/api/v1/bio-auth/health', 'error');
     } catch {
+      markApi('/api/v1/bio-auth/health', 'error');
       // fallback below
     }
 
-    setBioTrust({
-      score: 86,
-      confidence: 92,
-      driftRisk: 14,
-      lastCheck: new Date().toISOString(),
-    });
-  }, []);
+    setBioTrust(null);
+  }, [authToken, markApi]);
 
   const fetchPodTtl = useCallback(async () => {
     const nowEpochSec = Math.floor(Date.now() / 1000);
@@ -176,6 +295,7 @@ export default function Dashboard() {
       const res = await fetch(`${API_BASE}/api/v1/infra/pods/ttl`);
       if (res.ok) {
         const data = await res.json();
+        markApi('/api/v1/infra/pods/ttl', 'ok');
         const pods = Array.isArray(data?.pods) ? data.pods : [];
         setPodTtls(
           pods.slice(0, 5).map((p: any) => ({
@@ -188,7 +308,9 @@ export default function Dashboard() {
         );
         return;
       }
+      markApi('/api/v1/infra/pods/ttl', 'error');
     } catch {
+      markApi('/api/v1/infra/pods/ttl', 'error');
       // fallback below
     }
 
@@ -197,13 +319,14 @@ export default function Dashboard() {
       { name: 'sandbox-runner-ephem-33c1', namespace: 'cybershield', ageSec: 2920, ttlSec: 3600, fetchedAtEpochSec: nowEpochSec },
       { name: 'forensics-job-ephem-a2f0', namespace: 'cybershield', ageSec: 810, ttlSec: 1800, fetchedAtEpochSec: nowEpochSec },
     ]);
-  }, []);
+  }, [authToken, markApi]);
 
   const fetchLiveData = useCallback(async () => {
     try {
-      const [dashRes, alertsRes] = await Promise.all([
+      const [dashRes, alertsRes, rolloutRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard`),
         fetch(`${API_BASE}/api/v1/alerts`),
+        fetch(`${API_BASE}/api/v1/rollout/alerts`),
       ]);
 
       let dashboardOk = false;
@@ -212,6 +335,7 @@ export default function Dashboard() {
 
       if (dashRes.ok) {
         const data = await dashRes.json();
+        markApi('/api/v1/dashboard', 'ok');
         setMetrics({
           total_events_24h: data.total_events_24h,
           active_threats: data.active_threats,
@@ -221,13 +345,23 @@ export default function Dashboard() {
           top_attack_types: data.top_attack_types,
         });
         setServices(data.services || []);
+        setDashboardExtended(data.extended || null);
         dashboardOk = true;
         setLastUpdated(new Date());
+      } else {
+        markApi('/api/v1/dashboard', 'error');
       }
 
       if (alertsRes.ok) {
         const data = await alertsRes.json();
+        markApi('/api/v1/alerts', 'ok');
         alertsLive = data.is_live === true;
+
+        const sourceBreakdown = data.source_breakdown || {};
+        const primarySource = Object.entries(sourceBreakdown).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0] || null;
+        const rolloutModeFromAlerts = data.rollout_mode === 'live' || data.rollout_mode === 'synthetic'
+          ? data.rollout_mode
+          : 'unknown';
 
         if (!alertsLive) {
           if (data.rollout_mode === 'synthetic') {
@@ -253,23 +387,153 @@ export default function Dashboard() {
           status: a.status,
         }));
         setAlerts(liveAlerts);
+        setAlertFeedMeta((prev) => ({
+          total: Number(data.total ?? liveAlerts.length),
+          rolloutMode: rolloutModeFromAlerts,
+          primarySource,
+        }));
       } else {
+        markApi('/api/v1/alerts', 'error');
         nextDegradedReason = 'Alert API unavailable.';
+      }
+
+      if (rolloutRes.ok) {
+        const rolloutData = await rolloutRes.json();
+        markApi('/api/v1/rollout/alerts', 'ok');
+        const mode = rolloutData.mode === 'live' || rolloutData.mode === 'synthetic'
+          ? rolloutData.mode
+          : 'unknown';
+        setAlertFeedMeta((prev) => ({ ...prev, rolloutMode: mode }));
+      } else {
+        markApi('/api/v1/rollout/alerts', 'error');
       }
 
       const live = dashboardOk && alertsLive;
       setIsLive(live);
       setDegradedReason(live ? null : (nextDegradedReason || 'Partial backend availability; showing degraded data.'));
     } catch {
+      markApi('/api/v1/dashboard', 'error');
+      markApi('/api/v1/alerts', 'error');
+      markApi('/api/v1/rollout/alerts', 'error');
       // Backend unreachable — explicit degraded baseline, no synthetic alerts
       if (!metrics) {
         setMetrics(generateDegradedMetrics());
         setAlerts([]);
       }
+      setDashboardExtended(null);
+      setAlertFeedMeta({ total: 0, rolloutMode: 'unknown', primarySource: null });
       setIsLive(false);
       setDegradedReason('Backend unavailable. Showing degraded baseline with no synthetic alerts.');
     }
-  }, []);
+  }, [markApi]);
+
+  const fetchInnovationStatus = useCallback(async () => {
+    if (!authToken) {
+      markApi('/api/v1/innovations/status', 'auth');
+      setInnovationSummary(null);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/innovations/status`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) {
+        markApi('/api/v1/innovations/status', 'error');
+        setInnovationSummary(null);
+        return;
+      }
+      markApi('/api/v1/innovations/status', 'ok');
+      const items = await res.json();
+      const arr = Array.isArray(items) ? items : [];
+      setInnovationSummary({
+        total: arr.length,
+        active: arr.filter((i: any) => i.status === 'active').length,
+        degraded: arr.filter((i: any) => i.status === 'degraded').length,
+        offline: arr.filter((i: any) => i.status === 'offline').length,
+      });
+    } catch {
+      markApi('/api/v1/innovations/status', 'error');
+      setInnovationSummary(null);
+    }
+  }, [authToken, markApi]);
+
+  const fetchThreatSnapshot = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/threats/recent?limit=120`);
+      if (!res.ok) {
+        markApi('/api/v1/threats/recent', 'error');
+        setThreatSnapshot({ recentCount: 0, criticalCount: 0, campaignCount: 0, uniqueSources: 0 });
+        return;
+      }
+      markApi('/api/v1/threats/recent', 'ok');
+
+      const data = await res.json();
+      const threats = Array.isArray(data?.threats) ? data.threats : [];
+      const criticalCount = threats.filter((t: any) => String(t.severity || '').toLowerCase() === 'critical').length;
+      const campaignCount = new Set(
+        threats
+          .map((t: any) => String(t.campaign_id || '').trim())
+          .filter((id: string) => id.length > 0),
+      ).size;
+      const uniqueSources = new Set(
+        threats
+          .map((t: any) => String(t.src_ip || '').trim())
+          .filter((ip: string) => ip.length > 0),
+      ).size;
+
+      setThreatSnapshot({
+        recentCount: threats.length,
+        criticalCount,
+        campaignCount,
+        uniqueSources,
+      });
+    } catch {
+      markApi('/api/v1/threats/recent', 'error');
+      setThreatSnapshot({ recentCount: 0, criticalCount: 0, campaignCount: 0, uniqueSources: 0 });
+    }
+  }, [markApi]);
+
+  const fetchProtectedDomainData = useCallback(async () => {
+    if (!authToken) {
+      setProtectedStats({ playbooks: 0, swarmAgents: 0 });
+      return;
+    }
+    try {
+      const [playbooksRes, swarmRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/soar/playbooks`, { headers: { Authorization: `Bearer ${authToken}` } }),
+        fetch(`${API_BASE}/api/v1/swarm/health`, { headers: { Authorization: `Bearer ${authToken}` } }),
+      ]);
+
+      let playbooks = 0;
+      let swarmAgents = 0;
+
+      if (playbooksRes.ok) {
+        const data = await playbooksRes.json();
+        playbooks = Array.isArray(data?.playbooks) ? data.playbooks.length : Array.isArray(data) ? data.length : 0;
+        markApi('/api/v1/soar/playbooks', 'ok');
+      } else if (playbooksRes.status === 401 || playbooksRes.status === 403) {
+        markApi('/api/v1/soar/playbooks', 'auth');
+      } else {
+        markApi('/api/v1/soar/playbooks', 'error');
+      }
+
+      if (swarmRes.ok) {
+        const data = await swarmRes.json();
+        swarmAgents = String(data?.status || '').toLowerCase() === 'healthy' ? 1 : 0;
+        markApi('/api/v1/swarm/health', 'ok');
+      } else if (swarmRes.status === 401 || swarmRes.status === 403) {
+        markApi('/api/v1/swarm/health', 'auth');
+      } else {
+        markApi('/api/v1/swarm/health', 'error');
+      }
+
+      setProtectedStats({ playbooks, swarmAgents });
+    } catch {
+      markApi('/api/v1/soar/playbooks', 'error');
+      markApi('/api/v1/swarm/health', 'error');
+      setProtectedStats({ playbooks: 0, swarmAgents: 0 });
+    }
+  }, [authToken, markApi]);
 
   // Initial load + poll every 30s
   useEffect(() => {
@@ -277,14 +541,20 @@ export default function Dashboard() {
     fetchPhishingStats();
     fetchBioTrust();
     fetchPodTtl();
+    fetchInnovationStatus();
+    fetchThreatSnapshot();
+    fetchProtectedDomainData();
     const interval = setInterval(() => {
       fetchLiveData();
       fetchPhishingStats();
       fetchBioTrust();
       fetchPodTtl();
+      fetchInnovationStatus();
+      fetchThreatSnapshot();
+      fetchProtectedDomainData();
     }, 30_000);
     return () => clearInterval(interval);
-  }, [fetchLiveData, fetchPhishingStats, fetchBioTrust, fetchPodTtl]);
+  }, [fetchLiveData, fetchPhishingStats, fetchBioTrust, fetchPodTtl, fetchInnovationStatus, fetchThreatSnapshot, fetchProtectedDomainData]);
 
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
@@ -346,20 +616,106 @@ export default function Dashboard() {
     return { rows, overall };
   }, [alerts]);
 
-  if (!metrics) return <div className="text-center mt-20 text-gray-400">Connecting to backend...</div>;
+  const campaignSignal = useMemo(
+    () => alerts.find((a) => a.campaign_id || a.kill_chain_stage || typeof a.campaign_risk_score === 'number') || null,
+    [alerts],
+  );
+
+  const serviceStatus = useMemo(() => {
+    const map: Record<string, string> = {};
+    services.forEach((s: any) => {
+      map[String(s.name)] = String(s.status || 'offline');
+    });
+    return map;
+  }, [services]);
+
+  const coverageCards = useMemo(
+    () => [
+      {
+        key: 'threat-alerts',
+        label: 'Threat + Alerts',
+        value: `${alertFeedMeta.total} alerts / ${threatSnapshot.recentCount} recent threats`,
+        state: isLive ? 'live' : 'degraded',
+      },
+      {
+        key: 'phishing',
+        label: 'Anti-Phishing',
+        value: `${(phishingStats?.phishing_blocked ?? 0).toLocaleString()} blocked`,
+        state: serviceStatus['anti-phishing'] || 'offline',
+      },
+      {
+        key: 'soar',
+        label: 'Incident Response',
+        value: `${dashboardExtended?.incidents_total ?? 0} incidents / ${dashboardExtended?.incidents_auto_contained ?? 0} auto-contained`,
+        state: serviceStatus['incident-response'] || 'offline',
+      },
+      {
+        key: 'bio',
+        label: 'Bio-Auth',
+        value: `${bioTrust?.score ?? 0}/100 trust`,
+        state: serviceStatus['bio-auth'] || 'offline',
+      },
+      {
+        key: 'firewall',
+        label: 'Cognitive Firewall',
+        value: `${dashboardExtended?.ips_blocked ?? 0} blocked IPs / ${dashboardExtended?.firewall_rules ?? 0} rules`,
+        state: serviceStatus['cognitive-firewall'] || 'offline',
+      },
+      {
+        key: 'swarm',
+        label: 'Swarm Defense',
+        value: serviceStatus['swarm-agent'] === 'healthy'
+          ? `${threatSnapshot.uniqueSources} unique sources observed`
+          : 'status degraded',
+        state: serviceStatus['swarm-agent'] || 'offline',
+      },
+      {
+        key: 'self-healing',
+        label: 'Self-Healing',
+        value: serviceStatus['self-healing'] === 'healthy' ? 'integrity checks active' : 'integrity unknown',
+        state: serviceStatus['self-healing'] || 'offline',
+      },
+      {
+        key: 'innovations',
+        label: 'Innovations',
+        value: innovationSummary
+          ? `${innovationSummary.active}/${innovationSummary.total} active`
+          : 'auth required for aggregate status',
+        state: innovationSummary ? 'active' : 'degraded',
+      },
+    ],
+    [
+      alertFeedMeta.total,
+      isLive,
+      phishingStats,
+      dashboardExtended,
+      bioTrust,
+      serviceStatus,
+      innovationSummary,
+      threatSnapshot.recentCount,
+      threatSnapshot.uniqueSources,
+    ],
+  );
+
+  const apiUsageEntries = useMemo(() => Object.entries(apiUsage), [apiUsage]);
+  const apiOkCount = useMemo(() => apiUsageEntries.filter(([, status]) => status === 'ok').length, [apiUsageEntries]);
+  const apiErrorCount = useMemo(() => apiUsageEntries.filter(([, status]) => status === 'error').length, [apiUsageEntries]);
+  const apiTotalCount = apiUsageEntries.length;
+
+  if (!metrics) return <div className="text-center mt-20 text-slate-500">Connecting to backend...</div>;
 
   return (
     <div className="space-y-6">
       {/* Page header + live/demo badge */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <h1 className="text-lg sm:text-xl font-bold text-white tracking-wide">Security Operations Center</h1>
+        <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-wide">Security Operations Center</h1>
         <div className="flex items-center gap-2 text-xs flex-wrap">
           {lastUpdated && (
-            <span className="text-gray-500">Updated {lastUpdated.toLocaleTimeString()}</span>
+            <span className="text-slate-500">Updated {lastUpdated.toLocaleTimeString()}</span>
           )}
           <button
             onClick={fetchLiveData}
-            className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-gray-300 transition"
+            className="px-2 py-1 rounded bg-[#517EF9] hover:bg-[#436FE8] text-white transition"
           >
             ↻ Refresh
           </button>
@@ -372,12 +728,65 @@ export default function Dashboard() {
           >
             {isLive ? '● LIVE' : '○ DEGRADED'}
           </span>
+          <span className="px-2 py-1 rounded-full bg-[#EFF4FF] text-[#517EF9] border border-[#D8E3F7] uppercase">
+            mode: {alertFeedMeta.rolloutMode}
+          </span>
+          <span className="px-2 py-1 rounded-full bg-[#EFF4FF] text-slate-600 border border-[#D8E3F7]">
+            alerts: {alertFeedMeta.total}
+          </span>
+          {alertFeedMeta.primarySource && (
+            <span className="px-2 py-1 rounded-full bg-[#EFF4FF] text-cyan-700 border border-[#D8E3F7]">
+              source: {alertFeedMeta.primarySource}
+            </span>
+          )}
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#D8E3F7] bg-white p-2">
+        {[
+          { key: 'overview', label: 'Overview' },
+          { key: 'apis', label: 'API Usage' },
+          { key: 'system', label: 'System Health' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveSection(tab.key as 'overview' | 'apis' | 'system')}
+            className={`px-3 py-1.5 text-sm rounded-md transition ${
+              activeSection === tab.key
+                ? 'bg-[#517EF9] text-white'
+                : 'bg-[#EFF4FF] text-slate-600 hover:bg-[#E6EEFF]'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {(activeSection === 'apis' || activeSection === 'overview') && (
+        <div className="card">
+          <div className="card-header">API Utilization Monitor</div>
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-2 mb-3">
+            <div className="rounded-lg bg-[#F6F9FF] border border-[#E2E9FA] p-3"><p className="text-xs text-slate-500">Tracked APIs</p><p className="text-lg font-semibold text-slate-800">{apiTotalCount}</p></div>
+            <div className="rounded-lg bg-green-50 border border-green-200 p-3"><p className="text-xs text-green-700">Healthy Calls</p><p className="text-lg font-semibold text-green-700">{apiOkCount}</p></div>
+            <div className="rounded-lg bg-red-50 border border-red-200 p-3"><p className="text-xs text-red-700">Failed Calls</p><p className="text-lg font-semibold text-red-700">{apiErrorCount}</p></div>
+            <div className="rounded-lg bg-[#EFF4FF] border border-[#D8E3F7] p-3"><p className="text-xs text-[#517EF9]">Coverage</p><p className="text-lg font-semibold text-[#517EF9]">{Math.round((apiOkCount / Math.max(apiTotalCount, 1)) * 100)}%</p></div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {apiUsageEntries.map(([endpoint, status]) => (
+              <div key={endpoint} className="rounded-lg border border-[#E2E9FA] bg-[#F8FAFF] p-2 flex items-center justify-between gap-2">
+                <span className="text-xs text-slate-600 truncate">{endpoint}</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${stateBadgeClass(status)}`}>
+                  {stateLabel(status)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* KPI Row */}
       {degradedReason && (
-        <div className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300">
+        <div className="rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
           {degradedReason}
         </div>
       )}
@@ -386,7 +795,7 @@ export default function Dashboard() {
         <KPICard
           label="Events (24h)"
           value={metrics.total_events_24h.toLocaleString()}
-          color="text-[#6C63FF]"
+          color="text-[#517EF9]"
         />
         <KPICard
           label="Active Threats"
@@ -406,36 +815,28 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Main Grid */}
       <div className="grid grid-cols-12 gap-3 sm:gap-4">
-        {/* Threat Globe */}
-        <div className="col-span-12 lg:col-span-5 card">
-          <div className="card-header">Global Threat Map</div>
-          <ThreatGlobe />
-        </div>
-
-        {/* Event Timeline */}
         <div className="col-span-12 lg:col-span-7 card">
           <div className="card-header">Event Volume (24h)</div>
           <ResponsiveContainer width="100%" height={280}>
             <AreaChart data={timeSeriesData}>
               <defs>
                 <linearGradient id="colorEvents" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#6C63FF" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#6C63FF" stopOpacity={0} />
+                  <stop offset="5%" stopColor="#517EF9" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#517EF9" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="time" tick={{ fill: '#94A3B8', fontSize: 11 }} />
-              <YAxis tick={{ fill: '#94A3B8', fontSize: 11 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#D8E3F7" />
+              <XAxis dataKey="time" tick={{ fill: '#64748B', fontSize: 11 }} />
+              <YAxis tick={{ fill: '#64748B', fontSize: 11 }} />
               <Tooltip
-                contentStyle={{ background: '#1E293B', border: '1px solid #334155', borderRadius: 8 }}
-                labelStyle={{ color: '#94A3B8' }}
+                contentStyle={{ background: '#FFFFFF', border: '1px solid #D8E3F7', borderRadius: 8 }}
+                labelStyle={{ color: '#64748B' }}
               />
               <Area
                 type="monotone"
                 dataKey="events"
-                stroke="#6C63FF"
+                stroke="#517EF9"
                 fill="url(#colorEvents)"
                 strokeWidth={2}
               />
@@ -451,8 +852,7 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* Alert Severity Breakdown */}
-        <div className="col-span-12 md:col-span-6 lg:col-span-4 card">
+        <div className="col-span-12 md:col-span-6 lg:col-span-5 card">
           <div className="card-header">Alert Severity</div>
           <ResponsiveContainer width="100%" height={220}>
             <PieChart>
@@ -468,7 +868,7 @@ export default function Dashboard() {
                 {severityPieData.map((entry) => (
                   <Cell
                     key={entry.name}
-                    fill={SEVERITY_COLORS[entry.name] || '#6C63FF'}
+                      fill={SEVERITY_COLORS[entry.name] || '#517EF9'}
                   />
                 ))}
               </Pie>
@@ -488,25 +888,78 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Top Attack Types */}
-        <div className="col-span-12 md:col-span-6 lg:col-span-4 card">
+        <div className="col-span-12 card">
           <div className="card-header">Top Attack Types</div>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={metrics.top_attack_types} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis type="number" tick={{ fill: '#94A3B8', fontSize: 11 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#D8E3F7" />
+              <XAxis type="number" tick={{ fill: '#64748B', fontSize: 11 }} />
               <YAxis
                 type="category"
                 dataKey="name"
-                tick={{ fill: '#94A3B8', fontSize: 11 }}
+                tick={{ fill: '#64748B', fontSize: 11 }}
                 width={120}
               />
               <Tooltip
-                contentStyle={{ background: '#1E293B', border: '1px solid #334155', borderRadius: 8 }}
+                contentStyle={{ background: '#FFFFFF', border: '1px solid #D8E3F7', borderRadius: 8 }}
               />
-              <Bar dataKey="count" fill="#6C63FF" radius={[0, 4, 4, 0]} />
+              <Bar dataKey="count" fill="#517EF9" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Campaign Signal Summary */}
+      {campaignSignal && (
+        <div className="card border-cyan-200 bg-cyan-50/60">
+          <div className="card-header text-cyan-700">Active Campaign Signal</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+            <StatRow label="Campaign" value={campaignSignal.campaign_id ?? 'unattributed'} color="text-cyan-700" />
+            <StatRow label="Kill Chain" value={campaignSignal.kill_chain_stage ?? 'unknown'} color="text-amber-700" />
+            <StatRow
+              label="Risk"
+              value={typeof campaignSignal.campaign_risk_score === 'number' ? `${Math.round(campaignSignal.campaign_risk_score * 100)}%` : 'n/a'}
+              color="text-red-600"
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-header">Backend Capability Coverage</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+          {coverageCards.map((card) => (
+            <div key={card.key} className="rounded-lg border border-[#E2E9FA] bg-[#F6F9FF] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-slate-500 uppercase tracking-wider">{card.label}</span>
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${stateBadgeClass(card.state)}`}>
+                  {stateLabel(card.state)}
+                </span>
+              </div>
+              <div className="mt-1 text-sm font-semibold text-slate-800">{card.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
+        <div className="card">
+          <div className="card-header">Campaign and Stream Visibility</div>
+          <div className="space-y-2 text-sm">
+            <StatRow label="Recent threats" value={threatSnapshot.recentCount.toString()} color="text-[#517EF9]" />
+            <StatRow label="Critical threats" value={threatSnapshot.criticalCount.toString()} color="text-red-500" />
+            <StatRow label="Active campaigns" value={threatSnapshot.campaignCount.toString()} color="text-amber-600" />
+            <StatRow label="Primary source" value={alertFeedMeta.primarySource ?? 'unknown'} color="text-cyan-700" />
+          </div>
+        </div>
+      </div>
+
+      {/* Main Grid */}
+      <div className="grid grid-cols-12 gap-3 sm:gap-4">
+        {/* Threat Globe */}
+        <div className="col-span-12 lg:col-span-5 card">
+          <div className="card-header">Global Threat Map</div>
+          <ThreatGlobe />
         </div>
 
         {/* Live Alert Feed */}
@@ -519,20 +972,20 @@ export default function Dashboard() {
         <div className="col-span-12 lg:col-span-8 card">
           <div className="card-header flex items-center justify-between">
             <span>MITRE ATT&amp;CK Coverage Heatmap</span>
-            <span className="text-xs text-gray-400">Overall: {mitreHeatmap.overall}%</span>
+            <span className="text-xs text-slate-500">Overall: {mitreHeatmap.overall}%</span>
           </div>
           <div className="space-y-2">
             {mitreHeatmap.rows.map((row) => (
               <div key={row.tactic} className="grid grid-cols-12 gap-2 items-center">
-                <div className="col-span-12 sm:col-span-3 text-xs text-gray-300">{row.tactic}</div>
+                <div className="col-span-12 sm:col-span-3 text-xs text-slate-700">{row.tactic}</div>
                 <div className="col-span-9 sm:col-span-7 grid grid-cols-3 gap-1">
                   {row.cells.map((cell) => {
                     const intensity = Math.min(cell.count, 6);
                     const classes = [
-                      'bg-slate-800/70 border-slate-700',
-                      'bg-emerald-900/30 border-emerald-700/40',
-                      'bg-amber-900/30 border-amber-700/50',
-                      'bg-red-900/35 border-red-700/60',
+                      'bg-[#F8FAFF] border-[#DFE6F8]',
+                      'bg-emerald-100 border-emerald-300',
+                      'bg-amber-100 border-amber-300',
+                      'bg-red-100 border-red-300',
                     ];
                     const level = intensity === 0 ? 0 : intensity <= 2 ? 1 : intensity <= 4 ? 2 : 3;
                     return (
@@ -546,7 +999,7 @@ export default function Dashboard() {
                     );
                   })}
                 </div>
-                <div className="col-span-3 sm:col-span-2 text-right text-xs text-gray-400">{row.coverage}%</div>
+                <div className="col-span-3 sm:col-span-2 text-right text-xs text-slate-500">{row.coverage}%</div>
               </div>
             ))}
           </div>
@@ -559,10 +1012,10 @@ export default function Dashboard() {
             <div className="space-y-3">
               <div>
                 <div className="flex items-end gap-2">
-                  <span className="text-3xl font-bold text-cyan-300">{bioTrust.score}</span>
-                  <span className="text-sm text-gray-400">/100</span>
+                  <span className="text-3xl font-bold text-cyan-700">{bioTrust.score}</span>
+                  <span className="text-sm text-slate-500">/100</span>
                 </div>
-                <div className="mt-2 h-2 rounded-full bg-slate-800 overflow-hidden">
+                <div className="mt-2 h-2 rounded-full bg-slate-200 overflow-hidden">
                   <div
                     className={`h-full ${bioTrust.score >= 80 ? 'bg-green-500' : bioTrust.score >= 60 ? 'bg-yellow-500' : 'bg-red-500'}`}
                     style={{ width: `${Math.min(Math.max(bioTrust.score, 0), 100)}%` }}
@@ -578,7 +1031,7 @@ export default function Dashboard() {
               <StatRow
                 label="Last check"
                 value={new Date(bioTrust.lastCheck).toLocaleTimeString()}
-                color="text-gray-300"
+                color="text-slate-600"
               />
             </div>
           </div>
@@ -588,26 +1041,26 @@ export default function Dashboard() {
         <div className="col-span-12 md:col-span-6 lg:col-span-8 card">
           <div className="card-header">Ephemeral Pod Age / TTL Countdown</div>
           <div className="space-y-2">
-            {podTtls.length === 0 && <p className="text-sm text-gray-500">No ephemeral pods reported.</p>}
+            {podTtls.length === 0 && <p className="text-sm text-slate-500">No ephemeral pods reported.</p>}
             {podTtls.map((pod) => {
               const elapsed = Math.max(Math.floor(nowMs / 1000) - pod.fetchedAtEpochSec, 0);
               const remaining = Math.max(pod.ttlSec - pod.ageSec - elapsed, 0);
               const pct = Math.max(Math.min((remaining / Math.max(pod.ttlSec, 1)) * 100, 100), 0);
               return (
-                <div key={pod.name} className="p-2 rounded-lg bg-[#0F172A] border border-slate-800">
+                <div key={pod.name} className="p-2 rounded-lg bg-[#F5F8FF] border border-[#E2E9FA]">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-gray-300 font-mono truncate mr-2">{pod.name}</span>
-                    <span className={remaining < 300 ? 'text-red-400' : 'text-gray-400'}>
+                    <span className="text-slate-700 font-mono truncate mr-2">{pod.name}</span>
+                    <span className={remaining < 300 ? 'text-red-500' : 'text-slate-500'}>
                       {formatDuration(remaining)} left
                     </span>
                   </div>
-                  <div className="mt-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                  <div className="mt-1 h-1.5 rounded-full bg-slate-200 overflow-hidden">
                     <div
                       className={`h-full ${remaining < 300 ? 'bg-red-500' : remaining < 900 ? 'bg-yellow-500' : 'bg-emerald-500'}`}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  <div className="mt-1 text-[11px] text-gray-500">
+                  <div className="mt-1 text-[11px] text-slate-500">
                     ns: {pod.namespace} • age {formatDuration(pod.ageSec)} / ttl {formatDuration(pod.ttlSec)}
                   </div>
                 </div>
@@ -670,7 +1123,7 @@ export default function Dashboard() {
                 value={modelStatus.last_retrained
                   ? new Date(modelStatus.last_retrained).toLocaleDateString()
                   : 'Never'}
-                color="text-gray-300"
+                color="text-slate-600"
               />
               <StatRow
                 label="Pending feedback"
@@ -713,8 +1166,8 @@ function KPICard({
 
 function StatRow({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="flex items-center justify-between border-b border-slate-700 pb-1">
-      <span className="text-gray-400">{label}</span>
+    <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+      <span className="text-slate-500">{label}</span>
       <span className={`font-semibold tabular-nums ${color}`}>{value}</span>
     </div>
   );

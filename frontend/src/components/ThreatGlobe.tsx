@@ -65,7 +65,7 @@ export default function ThreatGlobe() {
     svg.append('rect')
       .attr('width', W)
       .attr('height', H)
-      .attr('fill', '#0F172A')
+      .attr('fill', '#F3F7FF')
       .attr('rx', 10);
 
     // ── Graticule grid ──────────────────────────
@@ -74,7 +74,7 @@ export default function ThreatGlobe() {
       .datum(graticule())
       .attr('d', pathGen)
       .attr('fill', 'none')
-      .attr('stroke', '#1E293B')
+      .attr('stroke', '#D7E3F8')
       .attr('stroke-width', 0.4)
       .attr('opacity', 0.8);
 
@@ -83,7 +83,7 @@ export default function ThreatGlobe() {
       .datum({ type: 'Sphere' } as any)
       .attr('d', pathGen)
       .attr('fill', 'none')
-      .attr('stroke', '#334155')
+      .attr('stroke', '#BFD1EE')
       .attr('stroke-width', 0.8);
 
     // ── Load + render GeoJSON ───────────────────
@@ -96,12 +96,12 @@ export default function ThreatGlobe() {
         .data(world.features)
         .join('path')
         .attr('d', (f) => pathGen(f) || '')
-        .attr('fill', '#1E3A5F')
-        .attr('stroke', '#2563EB')
+        .attr('fill', '#DCE8FF')
+        .attr('stroke', '#517EF9')
         .attr('stroke-width', 0.3)
         .attr('opacity', 0.85)
         .on('mouseenter', function (event, d) {
-          d3.select(this).attr('fill', '#6C63FF').attr('opacity', 1);
+          d3.select(this).attr('fill', '#517EF9').attr('opacity', 1);
           const name = (d.properties as any)?.name || (d.properties as any)?.admin || '';
           if (name) setTooltip({ x: event.offsetX, y: event.offsetY, text: name });
         })
@@ -109,7 +109,7 @@ export default function ThreatGlobe() {
           setTooltip((t) => t ? { ...t, x: event.offsetX, y: event.offsetY } : null);
         })
         .on('mouseleave', function () {
-          d3.select(this).attr('fill', '#1E3A5F').attr('opacity', 0.85);
+          d3.select(this).attr('fill', '#DCE8FF').attr('opacity', 0.85);
           setTooltip(null);
         });
 
@@ -182,7 +182,7 @@ export default function ThreatGlobe() {
         const pos = projection(h.coords);
         if (!pos) return;
         const [cx, cy] = pos;
-        const color = ARC_COLORS[h.severity] || '#6C63FF';
+        const color = ARC_COLORS[h.severity] || '#517EF9';
 
         // Outer pulse ring
         const ring = hotGroup.append('circle')
@@ -214,7 +214,7 @@ export default function ThreatGlobe() {
       svg.append('text')
         .attr('x', W / 2).attr('y', H / 2)
         .attr('text-anchor', 'middle')
-        .attr('fill', '#94A3B8')
+        .attr('fill', '#5f6f8a')
         .attr('font-size', 14)
         .text('Map loading...');
     });
@@ -230,14 +230,14 @@ export default function ThreatGlobe() {
       />
       {tooltip && (
         <div
-          className="absolute pointer-events-none bg-[#1E293B] text-gray-200 text-xs px-2 py-1 rounded border border-gray-700/50 shadow-lg"
+          className="absolute pointer-events-none bg-white text-slate-700 text-xs px-2 py-1 rounded border border-[#D8E3F7] shadow-lg"
           style={{ left: tooltip.x + 12, top: tooltip.y - 10 }}
         >
           {tooltip.text}
         </div>
       )}
       {/* Legend */}
-      <div className="flex gap-4 mt-2 text-xs text-gray-400 justify-end">
+      <div className="flex gap-4 mt-2 text-xs text-slate-500 justify-end">
         {Object.entries(ARC_COLORS).map(([sev, color]) => (
           <span key={sev} className="flex items-center gap-1">
             <span className="w-3 h-0.5 inline-block rounded" style={{ background: color }} />

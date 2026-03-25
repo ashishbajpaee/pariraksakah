@@ -121,6 +121,7 @@ services:
     environment:
       <<: *common-env
       ACCESS_CONTROL_PORT: "8002"
+      KEYS_DIR: "/tmp/cybershield/keys"
     depends_on: [redis, timescaledb]
     networks: [cybershield-net]
 
@@ -132,6 +133,7 @@ services:
     environment:
       <<: *common-env
       ANTI_PHISHING_PORT: "8003"
+      FEEDBACK_STORE_PATH: "/tmp/cybershield/feedback_store.jsonl"
     depends_on: [kafka, timescaledb, redis]
     networks: [cybershield-net]
 

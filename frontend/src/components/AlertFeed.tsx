@@ -14,7 +14,7 @@ interface AlertFeedProps {
 
 export default function AlertFeed({ alerts }: AlertFeedProps) {
   if (alerts.length === 0) {
-    return <p className="text-gray-500 text-sm">No alerts</p>;
+    return <p className="text-slate-500 text-sm">No alerts</p>;
   }
 
   return (
@@ -22,7 +22,7 @@ export default function AlertFeed({ alerts }: AlertFeedProps) {
       {alerts.map((alert) => (
         <div
           key={alert.id}
-          className="flex items-start gap-3 p-2.5 bg-[#0F172A] rounded-lg hover:bg-[#0F172A]/70 transition-colors"
+          className="flex items-start gap-3 p-2.5 bg-[#F5F8FF] border border-[#E2E9FA] rounded-lg hover:bg-[#EDF3FF] transition-colors"
         >
           <div className="mt-0.5">
             <span className={`badge ${SEVERITY_BADGE[alert.severity]}`}>
@@ -31,24 +31,24 @@ export default function AlertFeed({ alerts }: AlertFeedProps) {
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-200 truncate">
+              <span className="text-sm font-medium text-slate-800 truncate">
                 {alert.type}
               </span>
               {alert.mitre_technique && (
-                <span className="text-xs text-[#6C63FF] bg-[#6C63FF]/10 px-1.5 py-0.5 rounded">
+                <span className="text-xs text-[#517EF9] bg-[#517EF9]/12 px-1.5 py-0.5 rounded">
                   {alert.mitre_technique}
                 </span>
               )}
               {alert.kill_chain_stage && (
-                <span className="text-xs text-cyan-300 bg-cyan-500/10 px-1.5 py-0.5 rounded">
+                <span className="text-xs text-cyan-700 bg-cyan-500/10 px-1.5 py-0.5 rounded">
                   {alert.kill_chain_stage}
                 </span>
               )}
             </div>
-            <p className="text-xs text-gray-400 truncate mt-0.5">
+            <p className="text-xs text-slate-500 truncate mt-0.5">
               {alert.description}
             </p>
-            <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+            <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
               <span className="font-mono">{alert.source_ip}</span>
               {alert.campaign_id && (
                 <span className="text-cyan-400/80">{alert.campaign_id.slice(0, 8)}</span>

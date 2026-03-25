@@ -3,31 +3,34 @@
 @tailwind utilities;
 
 :root {
-  --bg-primary: #0F172A;
-  --bg-card: #1E293B;
-  --accent: #6C63FF;
-  --accent-glow: rgba(108, 99, 255, 0.25);
-  --text-primary: #F1F5F9;
-  --text-secondary: #94A3B8;
-  --border: #334155;
+  --bg-primary: #f7faff;
+  --bg-card: #ffffff;
+  --accent: #517EF9;
+  --accent-glow: rgba(81, 126, 249, 0.24);
+  --text-primary: #14213d;
+  --text-secondary: #5f6f8a;
+  --border: #d8e3f7;
   --danger: #EF4444;
   --warning: #F59E0B;
   --success: #10B981;
 }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Manrope', 'Segoe UI', system-ui, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
 }
 
 /* Card component */
 .card {
-  @apply rounded-xl border border-gray-700/50 bg-[#1E293B] p-5 shadow-lg;
+  @apply rounded-xl border p-5 shadow-sm;
+  border-color: var(--border);
+  background: var(--bg-card);
 }
 
 .card-header {
-  @apply text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3;
+  @apply text-sm font-semibold uppercase tracking-wider mb-3;
+  color: var(--text-secondary);
 }
 
 /* Metric pill */
@@ -36,7 +39,8 @@ body {
 }
 
 .metric-label {
-  @apply text-xs text-gray-500 mt-1;
+  @apply text-xs mt-1;
+  color: var(--text-secondary);
 }
 
 /* Severity badges */
@@ -57,7 +61,8 @@ body {
 }
 
 .badge-low {
-  @apply bg-blue-500/20 text-blue-400;
+  @apply text-blue-600;
+  background: rgba(81, 126, 249, 0.14);
 }
 
 /* Accent glow effect */
@@ -70,10 +75,10 @@ body {
   width: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--bg-primary);
+  background: #edf2ff;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: #b9c9ea;
   border-radius: 3px;
 }
 
