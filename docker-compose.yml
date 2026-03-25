@@ -218,6 +218,98 @@ services:
     depends_on: [api-gateway]
     networks: [cybershield-net]
 
+  # ─── Security Chaos Engineering Platform ──────────────────────
+  chaos-experiment-engine:
+    build:
+      context: ./services/chaos-experiment-engine
+      dockerfile: Dockerfile
+    ports: ["8020:8020"]
+    environment:
+      <<: *common-env
+      CHAOS_ENGINE_PORT: "8020"
+      DOCKER_HOST: unix:///var/run/docker.sock
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-changeme_neo4j}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./datasets:/datasets:ro
+    depends_on: [kafka, timescaledb, neo4j, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  chaos-injection-agent:
+    build:
+      context: ./services/chaos-injection-agent
+      dockerfile: Dockerfile
+    ports: ["8021:8021"]
+    environment:
+      <<: *common-env
+      CHAOS_AGENT_PORT: "8021"
+      DOCKER_HOST: unix:///var/run/docker.sock
+      API_GATEWAY_URL: http://api-gateway:8000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./datasets:/datasets:ro
+    depends_on: [kafka, chaos-experiment-engine]
+    restart: unless-stopped
+    privileged: true
+    networks: [cybershield-net]
+
+  chaos-scheduler:
+    build:
+      context: ./services/chaos-scheduler
+      dockerfile: Dockerfile
+    ports: ["8022:8022"]
+    environment:
+      <<: *common-env
+      CHAOS_SCHEDULER_PORT: "8022"
+      CHAOS_ENGINE_URL: http://chaos-experiment-engine:8020
+      PROMETHEUS_URL: http://prometheus:9090
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./services/chaos-experiment-engine/scenarios.json:/app/scenarios.json:ro
+    depends_on: [kafka, chaos-experiment-engine, prometheus]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  chaos-ai-intelligence:
+    build:
+      context: ./services/chaos-ai-intelligence
+      dockerfile: Dockerfile
+    ports: ["8023:8023"]
+    environment:
+      <<: *common-env
+      CHAOS_AI_PORT: "8023"
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-changeme_neo4j}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - ./datasets:/datasets:ro
+      - ./services/chaos-experiment-engine/scenarios.json:/app/scenarios.json:ro
+    depends_on: [kafka, timescaledb, neo4j, mlflow, chaos-experiment-engine]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  chaos-guardrails:
+    build:
+      context: ./services/chaos-guardrails
+      dockerfile: Dockerfile
+    ports: ["8024:8024"]
+    environment:
+      <<: *common-env
+      CHAOS_GUARDRAILS_PORT: "8024"
+      PROMETHEUS_URL: http://prometheus:9090
+      CHAOS_ENGINE_URL: http://chaos-experiment-engine:8020
+      CHAOS_MAX_EXPERIMENTS_DEV: "10"
+      CHAOS_MAX_EXPERIMENTS_STAGING: "3"
+    depends_on: [kafka, timescaledb, redis, prometheus]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
 volumes:
   postgres-data:
   neo4j-data:

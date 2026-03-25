@@ -52,3 +52,7 @@ htmlcov/
 .coverage
 coverage.xml
 .vercel
+datasets/
+dataset/
+\ndatasets/
+dataset/
