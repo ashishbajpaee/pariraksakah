@@ -24,6 +24,7 @@ import (
 
 	"github.com/cybershield-x/incident-response/internal/api"
 	"github.com/cybershield-x/incident-response/internal/audit"
+	"github.com/cybershield-x/incident-response/internal/filter"
 	"github.com/cybershield-x/incident-response/internal/queue"
 	"github.com/cybershield-x/incident-response/internal/soar"
 	"github.com/cybershield-x/incident-response/internal/soar/connectors"
@@ -37,11 +38,14 @@ type Incident struct {
 	Severity    string            `json:"severity"`
 	SourceIP    string            `json:"source_ip"`
 	Host        string            `json:"host"`
-	Description string            `json:"description"`
-	Status      string            `json:"status"` // open,investigating,contained,resolved
-	PlaybookRun *PlaybookExecution `json:"playbook_run,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	Description     string            `json:"description"`
+	Status          string            `json:"status"` // open,investigating,contained,resolved,false_positive
+	IsFalsePositive bool              `json:"is_false_positive"`
+	ConfidenceScore float64           `json:"confidence_score,omitempty"`
+	FilterReason    string            `json:"filter_reason,omitempty"`
+	PlaybookRun     *PlaybookExecution `json:"playbook_run,omitempty"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
 type PlaybookExecution struct {
@@ -77,10 +81,11 @@ var (
 	incidents   = make(map[string]*Incident)
 	incidentsMu sync.RWMutex
 	stats       = map[string]int{
-		"total_incidents":  0,
-		"auto_contained":  0,
-		"resolved":        0,
-		"mean_ttr_seconds": 0,
+		"total_incidents":          0,
+		"auto_contained":           0,
+		"resolved":                 0,
+		"mean_ttr_seconds":         0,
+		"false_positives_filtered": 0,
 	}
 )
 
@@ -92,6 +97,7 @@ var (
 	rollbackMgr       *soar.RollbackManager
 	jobStore          queue.JobStore
 	workerPool        *queue.Worker
+	filterEngine      *filter.FilterEngine
 )
 
 // ── Playbook store ─────────────────────────────
@@ -296,13 +302,25 @@ func createIncident(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:   time.Now(),
 	}
 
+	filterRes := filterEngine.Evaluate(req.AlertType, req.Severity, req.SourceIP, req.Description)
+	if filterRes.IsFalsePositive {
+		inc.Status = "false_positive"
+		inc.IsFalsePositive = true
+		inc.ConfidenceScore = filterRes.ConfidenceScore
+		inc.FilterReason = filterRes.Reason
+		
+		incidentsMu.Lock()
+		stats["false_positives_filtered"]++
+		incidentsMu.Unlock()
+	}
+
 	incidentsMu.Lock()
 	incidents[inc.ID] = inc
 	stats["total_incidents"]++
 	incidentsMu.Unlock()
 
 	// Auto-execute playbook for critical/high incidents via job queue
-	if req.Severity == "critical" || req.Severity == "high" {
+	if !inc.IsFalsePositive && (req.Severity == "critical" || req.Severity == "high") {
 		playbook := selectPlaybook(req.AlertType)
 		alertCtx := map[string]any{
 			"host":       req.Host,
@@ -428,6 +446,7 @@ func main() {
 	auditStore = audit.NewMemoryStore()
 	rollbackMgr = soar.NewRollbackManager(connectorRegistry, auditStore)
 	jobStore = queue.NewMemoryJobStore()
+	filterEngine = filter.NewEngine()
 
 	log.Printf("[SOAR] Connector simulation mode: %v", connectorRegistry.IsSimulated())
 

@@ -14,7 +14,7 @@ interface Incident {
   id: string;
   title: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
-  status: 'active' | 'contained' | 'resolved';
+  status: 'active' | 'contained' | 'resolved' | 'false_positive';
   playbook: string;
   started_at: string;
   events: IncidentEvent[];
@@ -84,6 +84,7 @@ const STATUS_STYLES: Record<string, { bg: string; text: string }> = {
   active: { bg: 'bg-red-500/10', text: 'text-red-400' },
   contained: { bg: 'bg-yellow-500/10', text: 'text-yellow-400' },
   resolved: { bg: 'bg-green-500/10', text: 'text-green-400' },
+  false_positive: { bg: 'bg-gray-500/10', text: 'text-gray-400' },
 };
 
 // ── Forensic Evidence Chain ──────────────────────
