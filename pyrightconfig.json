@@ -1,5 +1,5 @@
 {
-  "include": ["services/predictive-threat-intel", "services/security-dna"],
+  "include": ["services/predictive-threat-intel", "services/security-dna", "services/dsrn"],
   "exclude": ["**/node_modules", "**/__pycache__"],
   "defineConstant": {
     "DEBUG": true

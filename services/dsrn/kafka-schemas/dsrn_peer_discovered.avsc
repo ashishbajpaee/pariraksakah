@@ -1,0 +1,1 @@
+{"type":"record","name":"PeerDiscovered","namespace":"com.cybershield.dsrn","fields":[{"name":"peer_id","type":"string"},{"name":"organization_name","type":"string"},{"name":"public_key","type":"string"},{"name":"dna_fingerprint","type":"string"},{"name":"endpoint_url","type":"string"},{"name":"discovered_at","type":"string"}]}

@@ -455,6 +455,110 @@ services:
     restart: unless-stopped
     networks: [cybershield-net]
 
+  # ─── Decentralized Security Response Network (DSRN) ─────────
+  dsrn-peer-node:
+    build:
+      context: ./services/dsrn/peer-node
+      dockerfile: Dockerfile
+    ports: ["8060:8060", "4001:4001"]
+    environment:
+      <<: *common-env
+      DSRN_PEER_PORT: "8060"
+      DSRN_P2P_PORT: "4001"
+      DSRN_MODE: ${DSRN_MODE:-development}
+    depends_on: [kafka, timescaledb, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  dsrn-consensus-engine:
+    build:
+      context: ./services/dsrn/consensus-engine
+      dockerfile: Dockerfile
+    ports: ["8061:8061"]
+    environment:
+      <<: *common-env
+      CONSENSUS_PORT: "8061"
+      PBFT_MIN_PEERS: "4"
+      PBFT_TIMEOUT_SECS: "30"
+    depends_on: [kafka, timescaledb, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  dsrn-threat-gossip:
+    build:
+      context: ./services/dsrn/threat-gossip
+      dockerfile: Dockerfile
+    ports: ["8062:8062"]
+    environment:
+      <<: *common-env
+      GOSSIP_PORT: "8062"
+      GOSSIP_FANOUT: "3"
+      GOSSIP_INTERVAL_SECS: "15"
+      GOSSIP_MAX_HOPS: "10"
+    depends_on: [kafka, timescaledb, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  dsrn-response-coordinator:
+    build:
+      context: ./services/dsrn/response-coordinator
+      dockerfile: Dockerfile
+    ports: ["8063:8063"]
+    environment:
+      <<: *common-env
+      RESPONSE_PORT: "8063"
+    depends_on: [kafka, timescaledb, neo4j]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  dsrn-peer-trust-manager:
+    build:
+      context: ./services/dsrn/peer-trust-manager
+      dockerfile: Dockerfile
+    ports: ["8064:8064"]
+    environment:
+      <<: *common-env
+      TRUST_MANAGER_PORT: "8064"
+    depends_on: [kafka, timescaledb, neo4j, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  dsrn-blockchain-ledger:
+    build:
+      context: ./services/dsrn/blockchain-ledger
+      dockerfile: Dockerfile
+    ports: ["8065:8065"]
+    environment:
+      <<: *common-env
+      LEDGER_PORT: "8065"
+    depends_on: [kafka, timescaledb]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  dsrn-network-monitor:
+    build:
+      context: ./services/dsrn/network-monitor
+      dockerfile: Dockerfile
+    ports: ["8066:8066"]
+    environment:
+      <<: *common-env
+      MONITOR_PORT: "8066"
+    depends_on: [kafka, timescaledb, neo4j, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  dsrn-dashboard-api:
+    build:
+      context: ./services/dsrn/dashboard-api
+      dockerfile: Dockerfile
+    ports: ["8067:8067"]
+    environment:
+      <<: *common-env
+      DSRN_DASHBOARD_PORT: "8067"
+    depends_on: [timescaledb, neo4j, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
 volumes:
   prediction-models:
   postgres-data:

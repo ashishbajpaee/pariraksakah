@@ -1,0 +1,1 @@
+{"type":"record","name":"ConsensusRound","namespace":"com.cybershield.dsrn","fields":[{"name":"round_id","type":"string"},{"name":"phase","type":"string"},{"name":"proposal_hash","type":"string"},{"name":"sender_peer_id","type":"string"},{"name":"participants","type":"string"},{"name":"timestamp","type":"string"}]}

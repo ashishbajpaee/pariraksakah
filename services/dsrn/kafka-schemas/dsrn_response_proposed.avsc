@@ -1,0 +1,1 @@
+{"type":"record","name":"ResponseProposed","namespace":"com.cybershield.dsrn","fields":[{"name":"action_id","type":"string"},{"name":"proposed_by_peer_id","type":"string"},{"name":"action_type","type":"string"},{"name":"target","type":"string"},{"name":"required_threshold","type":"double"},{"name":"proposed_at","type":"string"}]}
