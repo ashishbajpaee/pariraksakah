@@ -249,6 +249,8 @@ var services = map[string]ServiceConfig{
 	"cognitive-firewall": {Name: "cognitive-firewall", URL: env("COGNITIVE_FIREWALL_URL", "http://cognitive-firewall:8007")},
 	"self-healing":       {Name: "self-healing", URL: env("SELF_HEALING_URL", "http://self-healing:8008")},
 	"satellite-link":     {Name: "satellite-link", URL: env("SATELLITE_LINK_URL", "http://satellite-link:8009")},
+	"neuro-snn-engine":   {Name: "neuro-snn-engine", URL: env("NEURO_SNN_URL", "http://neuro-snn-engine:8070")},
+	"neuro-immune":       {Name: "neuro-immune", URL: env("NEURO_IMMUNE_URL", "http://neuro-adaptive-immune:8075")},
 }
 
 func env(key, fallback string) string {
@@ -567,6 +569,71 @@ func MetricsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// ── Neuromorphic Middleware ────────────────────────
+
+var (
+	neuroImmuneCache   map[string]string
+	neuroImmuneCacheMu sync.RWMutex
+)
+
+func init() {
+	neuroImmuneCache = make(map[string]string)
+	go func() {
+		for {
+			func() {
+				client := http.Client{Timeout: 2 * time.Second}
+				resp, err := client.Get("http://neuro-adaptive-immune:8075/immune/antibodies")
+				if err == nil && resp.StatusCode == 200 {
+					var rules map[string]string
+					if err := json.NewDecoder(resp.Body).Decode(&rules); err == nil {
+						neuroImmuneCacheMu.Lock()
+						neuroImmuneCache = rules
+						neuroImmuneCacheMu.Unlock()
+					}
+					resp.Body.Close()
+				}
+			}()
+			time.Sleep(10 * time.Second)
+		}
+	}()
+}
+
+func NeuromorphicMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clientIP := r.RemoteAddr
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			clientIP = strings.Split(xff, ",")[0]
+		}
+		
+		neuroImmuneCacheMu.RLock()
+		action, exists := neuroImmuneCache[clientIP]
+		neuroImmuneCacheMu.RUnlock()
+
+		if exists && action == "DROP" {
+			log.Printf("[IMMUNE-BLOCK] IP %s blocked by neuromorphic antibody", clientIP)
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "blocked by adaptive immune system"})
+			return
+		}
+
+		go func(path, method, ip string) {
+			payload := map[string]interface{}{
+				"event_type": "api_request",
+				"severity":   1,
+				"context": map[string]string{
+					"path":   path,
+					"method": method,
+					"ip":     ip,
+				},
+			}
+			body, _ := json.Marshal(payload)
+			client := http.Client{Timeout: 2 * time.Second}
+			client.Post("http://neuro-snn-engine:8070/snn/input", "application/json", strings.NewReader(string(body)))
+		}(r.URL.Path, r.Method, clientIP)
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ── Reverse Proxy ──────────────────────────────
 
 func createReverseProxy(target string) http.HandlerFunc {
@@ -685,6 +752,7 @@ func main() {
 	r.Use(middleware.Compress(5))
 	r.Use(MetricsMiddleware)
 	r.Use(RateLimitMiddleware(rateLimiter))
+	r.Use(NeuromorphicMiddleware)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000", "https://*.cybershield-x.io"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
@@ -701,6 +769,16 @@ func main() {
 			"service": "api-gateway",
 			"version": "1.0.0",
 			"time":    time.Now().UTC().Format(time.RFC3339),
+		})
+	})
+
+	r.Get("/neuro/status", func(w http.ResponseWriter, r *http.Request) {
+		neuroImmuneCacheMu.RLock()
+		cacheSize := len(neuroImmuneCache)
+		neuroImmuneCacheMu.RUnlock()
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"status": "Neuromorphic AI Gateway Integration Active",
+			"immune_cache_size": cacheSize,
 		})
 	})
 

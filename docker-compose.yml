@@ -559,6 +559,117 @@ services:
     restart: unless-stopped
     networks: [cybershield-net]
 
+  # ─── Neuromorphic Computing AI Security System ─────────
+  neuro-snn-engine:
+    build:
+      context: ./services/neuro-snn-engine
+      dockerfile: Dockerfile
+    ports: ["8070:8070"]
+    environment:
+      <<: *common-env
+      NEURO_SNN_PORT: "8070"
+    depends_on: [kafka, timescaledb, neo4j, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-synaptic-memory:
+    build:
+      context: ./services/neuro-synaptic-memory
+      dockerfile: Dockerfile
+    ports: ["8071:8071"]
+    environment:
+      <<: *common-env
+      NEURO_SYNAPTIC_PORT: "8071"
+    depends_on: [kafka, timescaledb, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-plasticity-manager:
+    build:
+      context: ./services/neuro-plasticity-manager
+      dockerfile: Dockerfile
+    ports: ["8072:8072"]
+    environment:
+      <<: *common-env
+      NEURO_PLASTICITY_PORT: "8072"
+    depends_on: [kafka, timescaledb, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-anomaly-cortex:
+    build:
+      context: ./services/neuro-anomaly-cortex
+      dockerfile: Dockerfile
+    ports: ["8073:8073"]
+    environment:
+      <<: *common-env
+      NEURO_CORTEX_PORT: "8073"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on: [kafka, timescaledb, mlflow]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-threat-hippocampus:
+    build:
+      context: ./services/neuro-threat-hippocampus
+      dockerfile: Dockerfile
+    ports: ["8074:8074"]
+    environment:
+      <<: *common-env
+      NEURO_HIPPOCAMPUS_PORT: "8074"
+    depends_on: [kafka, timescaledb, neo4j]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-adaptive-immune:
+    build:
+      context: ./services/neuro-adaptive-immune
+      dockerfile: Dockerfile
+    ports: ["8075:8075"]
+    environment:
+      <<: *common-env
+      NEURO_IMMUNE_PORT: "8075"
+    depends_on: [kafka, timescaledb, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-dream-consolidator:
+    build:
+      context: ./services/neuro-dream-consolidator
+      dockerfile: Dockerfile
+    ports: ["8076:8076"]
+    environment:
+      <<: *common-env
+      NEURO_DREAM_PORT: "8076"
+    depends_on: [kafka, timescaledb, neo4j, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-evolution-system:
+    build:
+      context: ./services/neuro-evolution-system
+      dockerfile: Dockerfile
+    ports: ["8077:8077"]
+    environment:
+      <<: *common-env
+      NEURO_EVOLUTION_PORT: "8077"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on: [kafka, timescaledb, mlflow]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  neuro-dashboard-api:
+    build:
+      context: ./services/neuro-dashboard-api
+      dockerfile: Dockerfile
+    ports: ["8078:8078"]
+    environment:
+      <<: *common-env
+      NEURO_DASHBOARD_PORT: "8078"
+    depends_on: [kafka, timescaledb, neo4j, prometheus]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
 volumes:
   prediction-models:
   postgres-data:

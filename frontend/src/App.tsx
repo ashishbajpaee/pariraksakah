@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import ThreatHunting from './pages/ThreatHunting';
 import Innovations from './pages/Innovations';
 import IncidentResponse from './pages/IncidentResponse';
+import NeuromorphicBrain from './pages/NeuromorphicBrain';
 import { useAppStore } from './store/useAppStore';
 
 const navItems = [
@@ -11,6 +12,7 @@ const navItems = [
   { path: '/threat-hunting' as const, label: 'Threat Hunting' },
   { path: '/innovations' as const, label: 'Innovations' },
   { path: '/incidents' as const, label: 'Incidents' },
+  { path: '/neuromorphic' as const, label: 'Neuromorphic Brain' },
 ];
 
 export default function App() {
@@ -58,6 +60,7 @@ export default function App() {
             <Route path="/threat-hunting" element={<ThreatHunting />} />
             <Route path="/innovations" element={<Innovations />} />
             <Route path="/incidents" element={<IncidentResponse />} />
+            <Route path="/neuromorphic" element={<NeuromorphicBrain />} />
           </Routes>
         </main>
       </div>
