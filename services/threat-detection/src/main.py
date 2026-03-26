@@ -3,14 +3,18 @@
 import os
 import time
 import math
+import asyncio
 import logging
 import hashlib
 from collections import defaultdict, deque
-from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, HTTPException
+from typing import Dict, List, Optional, Any, Set
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app, Counter, Histogram
 from pydantic import BaseModel
+import sys, os as _os
+_os.path.insert(0, _os.path.dirname(_os.path.abspath(__file__))) if _os.path.dirname(_os.path.abspath(__file__)) not in sys.path else None
+from ingestion.pcap_sniffer import SnifferManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("threat-detection")
@@ -30,11 +34,16 @@ app.mount("/metrics", make_asgi_app())
 
 # ── In-memory state for UEBA / anomaly detection ─
 
-_event_window: deque = deque(maxlen=10000)          # sliding window of recent events
+_event_window: deque = deque(maxlen=10000)
 _ip_counters: Dict[str, deque] = defaultdict(lambda: deque(maxlen=500))
 _user_baselines: Dict[str, dict] = {}
 _detected_threats: List[dict] = []
 _stats = {"events_processed": 0, "threats_detected": 0, "false_positives_suppressed": 0}
+
+# ── Live Capture ─────────────────────────────────
+
+_sniffer_manager = SnifferManager()
+_ws_clients: Set[WebSocket] = set()
 
 # ── Known IOC / suspicious ports / MITRE mapping ─
 
@@ -287,12 +296,123 @@ async def get_recent_threats(limit: int = 50):
 async def get_stats():
     return {"service": "threat-detection", **_stats}
 
+
+# ── Live Capture ──────────────────────────────────
+
+@app.post("/capture/start")
+async def start_capture():
+    """Start live packet capture / simulation."""
+    loop = asyncio.get_event_loop()
+    result = _sniffer_manager.start(loop)
+    if result["status"] == "started":
+        # Start the background pipeline task
+        asyncio.ensure_future(_capture_pipeline())
+    return result
+
+
+@app.post("/capture/stop")
+async def stop_capture():
+    """Stop live packet capture."""
+    return _sniffer_manager.stop()
+
+
+@app.get("/capture/status")
+async def capture_status():
+    """Return current sniffer status."""
+    return _sniffer_manager.status()
+
+
+@app.websocket("/ws/live-alerts")
+async def websocket_live_alerts(ws: WebSocket):
+    """Stream real-time threat alerts to WebSocket clients."""
+    await ws.accept()
+    _ws_clients.add(ws)
+    logger.info("[WS] Client connected. Total clients: %d", len(_ws_clients))
+    try:
+        while True:
+            # Keep connection alive; actual messages are pushed by the pipeline
+            await asyncio.sleep(30)
+            await ws.send_json({"type": "ping"})
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        _ws_clients.discard(ws)
+        logger.info("[WS] Client disconnected. Total clients: %d", len(_ws_clients))
+
+
+async def _capture_pipeline():
+    """Background task: consume sniffer queue, classify, broadcast threats."""
+    logger.info("[Capture] Pipeline started")
+    while _sniffer_manager.is_running:
+        event = await _sniffer_manager.get_event(timeout=0.1)
+        if event is None:
+            continue
+
+        # Build NetworkEvent-compatible dict for the classifier
+        ne = NetworkEvent(
+            src_ip=event.get("src_ip", "0.0.0.0"),
+            dst_ip=event.get("dst_ip", "0.0.0.0"),
+            dst_port=int(event.get("dst_port", 0)),
+            protocol=event.get("protocol", "TCP"),
+            bytes_sent=int(event.get("bytes_sent", 0)),
+            bytes_recv=int(event.get("bytes_recv", 0)),
+            duration_ms=int(event.get("duration_ms", 0)),
+            payload_entropy=float(event.get("payload_entropy", 0.0)),
+        )
+
+        result = _classify_network_event(ne)
+        _stats["events_processed"] += 1
+        _event_window.append({**event, **result})
+
+        if result["is_threat"]:
+            _stats["threats_detected"] += 1
+            alert = {
+                "type":             "threat",
+                "event_id":         event.get("event_id"),
+                "timestamp":        event.get("timestamp"),
+                "src_ip":           event.get("src_ip"),
+                "dst_ip":           event.get("dst_ip"),
+                "dst_port":         event.get("dst_port"),
+                "protocol":         event.get("protocol"),
+                "severity":         result["severity"],
+                "score":            result["score"],
+                "techniques":       result["techniques_detected"],
+                "mitre_id":         result["mitre_technique_id"],
+                "mitre_name":       result["mitre_technique_name"],
+                "mitre_tactic":     result["mitre_tactic"],
+                "simulated":        event.get("_simulated", False),
+            }
+            if result.get("primary_technique"):
+                THREAT_DETECTED.labels(
+                    severity=result["severity"],
+                    technique=result["primary_technique"]
+                ).inc()
+            _detected_threats.append(alert)
+            if len(_detected_threats) > 1000:
+                _detected_threats.pop(0)
+
+            # Broadcast to all WebSocket clients
+            dead: set = set()
+            for ws in _ws_clients.copy():
+                try:
+                    await ws.send_json(alert)
+                except Exception:
+                    dead.add(ws)
+            _ws_clients.difference_update(dead)
+
+    logger.info("[Capture] Pipeline stopped")
+
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Threat Detection Engine starting up...")
     logger.info("KAFKA_BOOTSTRAP_SERVERS=%s", os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"))
     logger.info("Threat Detection Engine ready — statistical + rule-based detection active")
+    logger.info("Live capture: POST /capture/start | WebSocket: ws://host/ws/live-alerts")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    _sniffer_manager.stop()
     logger.info("Threat Detection Engine shutting down...")
+

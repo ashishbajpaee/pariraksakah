@@ -7,6 +7,7 @@ import IncidentResponse from './pages/IncidentResponse';
 import NeuromorphicBrain from './pages/NeuromorphicBrain';
 import QuantumSecurity from './pages/QuantumSecurity';
 import SIEMDashboard from './pages/SIEMDashboard';
+import LiveCapture from './pages/LiveCapture';
 import { useAppStore } from './store/useAppStore';
 
 const navItems = [
@@ -17,6 +18,7 @@ const navItems = [
   { path: '/neuromorphic' as const, label: 'Neuromorphic Brain' },
   { path: '/quantum' as const, label: 'Quantum Security' },
   { path: '/siem' as const, label: '📡 SIEM' },
+  { path: '/live-capture' as const, label: '🎯 Live Capture' },
 ];
 
 export default function App() {
@@ -67,6 +69,7 @@ export default function App() {
             <Route path="/neuromorphic" element={<NeuromorphicBrain />} />
             <Route path="/quantum" element={<QuantumSecurity />} />
             <Route path="/siem" element={<SIEMDashboard />} />
+            <Route path="/live-capture" element={<LiveCapture />} />
           </Routes>
         </main>
       </div>
