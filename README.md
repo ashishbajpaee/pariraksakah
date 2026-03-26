@@ -219,15 +219,22 @@ docker compose up -d --build
 - `admin / admin123`
 - `analyst / analyst123`
 
-### 4. Use the Dashboard Demo Console
+### 4. Run the demo scripts from PowerShell
 
-From the main dashboard, launch the three built-in demo stories:
+From repository root, use the scenario injectors instead of the dashboard UI:
 
-- `Launch Threat Wave`
-- `Run Phishing Scenario`
-- `Trigger Incident Response`
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-ThreatWave.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-AnonymousPhishing.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-IncidentResponse.ps1
+```
 
-These orchestrate the existing backend services and refresh the dashboard automatically so the live panels react without extra terminal steps.
+Additional injectors:
+
+- `.\scripts\Invoke-MalwareBurst.ps1`
+- `.\scripts\Invoke-RansomwareScenario.ps1`
+
+These scripts log in, call the real backend routes, and leave visible results in the dashboard and incidents board.
 
 ### 5. Optional background feed
 
@@ -240,9 +247,9 @@ node scripts/live_event_feeder.js
 ### 6. Suggested pitch order
 
 1. Dashboard overview and service health
-2. Threat Wave for live alerts and MITRE coverage
-3. Phishing Scenario for social-engineering defense
-4. Incident Response for automated remediation
+2. `Invoke-ThreatWave.ps1` for live alerts and MITRE coverage
+3. `Invoke-AnonymousPhishing.ps1` for social-engineering defense
+4. `Invoke-IncidentResponse.ps1` for automated remediation
 5. Innovations page for the broader platform vision
 
 For a judge-ready checklist and short presentation script, see [HACKATHON_RUNBOOK.md](./HACKATHON_RUNBOOK.md).

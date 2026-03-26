@@ -171,6 +171,18 @@ paths:
                 additionalProperties: true
 
   /api/v1/auth/verify:
+    get:
+      tags: [Auth]
+      summary: Verify token (public gateway route)
+      description: Proxied to access-control service auth verify.
+      responses:
+        '200':
+          description: Verification response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
     post:
       tags: [Auth]
       summary: Verify token (public gateway route)

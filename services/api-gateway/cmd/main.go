@@ -964,6 +964,7 @@ func main() {
 
 	// ── Public Auth (login to get JWT) ──
 	r.Post("/api/v1/auth/login", proxyToExact(services["access-control"].URL+"/auth/login"))
+	r.Get("/api/v1/auth/verify", proxyToExact(services["access-control"].URL+"/auth/verify"))
 	r.Post("/api/v1/auth/verify", proxyToExact(services["access-control"].URL+"/auth/verify"))
 
 	// ── Public scan endpoints (no auth required) ──
@@ -1010,6 +1011,11 @@ func main() {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(JWTAuthMiddleware)
 		r.Use(AuthorizationMiddleware)
+
+		r.Route("/auth", func(r chi.Router) {
+			r.Get("/verify", proxyToExact(services["access-control"].URL+"/auth/verify"))
+			r.Post("/verify", proxyToExact(services["access-control"].URL+"/auth/verify"))
+		})
 
 		// Threat Detection & Metrics
 		r.Route("/threats", func(r chi.Router) {

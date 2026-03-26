@@ -26,6 +26,42 @@ export default function App() {
 
   const isAuthed = useMemo(() => authToken.length > 0, [authToken]);
 
+  React.useEffect(() => {
+    if (!authToken) {
+      return;
+    }
+
+    let cancelled = false;
+    fetch(`${API_BASE}/api/v1/auth/verify`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          throw new Error(`verify_failed_${res.status}`);
+        }
+        const payload = await res.json().catch(() => ({}));
+        const nextRole = String(payload?.role || localStorage.getItem('dashboard_user_role') || '');
+        if (nextRole) {
+          localStorage.setItem('dashboard_user_role', nextRole);
+          setUserRole(nextRole);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        localStorage.removeItem('dashboard_access_token');
+        localStorage.removeItem('dashboard_user_role');
+        setAuthToken('');
+        setUserRole('');
+        setLoginError('Session expired. Please sign in again.');
+        setScreen('login');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken]);
+
   const handleLogin = async () => {
     setIsLoggingIn(true);
     setLoginError(null);
@@ -188,10 +224,10 @@ export default function App() {
         {/* Page Content */}
         <main className="p-3 sm:p-6">
           <Routes>
-            <Route path="/" element={isAuthed ? <Dashboard /> : <Navigate to="/blocked" replace />} />
+            <Route path="/" element={isAuthed ? <Dashboard authToken={authToken} /> : <Navigate to="/blocked" replace />} />
             <Route path="/threat-hunting" element={isAuthed ? <ThreatHunting /> : <Navigate to="/blocked" replace />} />
             <Route path="/innovations" element={isAuthed ? <Innovations /> : <Navigate to="/blocked" replace />} />
-            <Route path="/incidents" element={isAuthed ? <IncidentResponse /> : <Navigate to="/blocked" replace />} />
+            <Route path="/incidents" element={isAuthed ? <IncidentResponse authToken={authToken} /> : <Navigate to="/blocked" replace />} />
             <Route path="/blocked" element={<div className="text-sm text-slate-600">Please login from the landing page.</div>} />
           </Routes>
         </main>

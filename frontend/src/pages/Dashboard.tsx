@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import {
   AreaChart,
   Area,
@@ -75,18 +74,6 @@ type ThreatSnapshot = {
 };
 
 type ApiUsageStatus = 'ok' | 'error' | 'idle' | 'auth';
-
-type DemoAction = 'threat-wave' | 'phishing-scenario' | 'incident-scenario';
-
-type DemoScenarioResponse = {
-  status: 'ok' | 'partial' | 'error';
-  scenario_id: string;
-  message: string;
-  incident_id?: string;
-  affected_entities?: string[];
-  results?: Record<string, any>;
-  errors?: string[];
-};
 
 // ── Fallback baseline data ─────────────────────
 
@@ -169,7 +156,7 @@ function stateLabel(state: string) {
 
 // ── Component ──────────────────────────────────
 
-export default function Dashboard() {
+export default function Dashboard({ authToken }: { authToken: string }) {
   const { alerts, setAlerts, addAlert, metrics, setMetrics, setWsConnected } = useAppStore();
   const [isLive, setIsLive] = useState(false);
   const [services, setServices] = useState<any[]>([]);
@@ -190,7 +177,6 @@ export default function Dashboard() {
     primarySource: null,
   });
   const [activeSection, setActiveSection] = useState<'overview' | 'apis' | 'system'>('overview');
-  const [authToken] = useState<string>(() => localStorage.getItem('dashboard_access_token') || '');
   const [protectedStats, setProtectedStats] = useState<{ playbooks: number; swarmAgents: number }>({
     playbooks: 0,
     swarmAgents: 0,
@@ -207,17 +193,7 @@ export default function Dashboard() {
     '/api/v1/innovations/status': 'idle',
     '/api/v1/soar/playbooks': 'idle',
     '/api/v1/swarm/health': 'idle',
-    '/api/v1/demo/threat-wave': 'idle',
-    '/api/v1/demo/phishing-scenario': 'idle',
-    '/api/v1/demo/incident-scenario': 'idle',
   });
-  const [demoLoading, setDemoLoading] = useState<Record<DemoAction, boolean>>({
-    'threat-wave': false,
-    'phishing-scenario': false,
-    'incident-scenario': false,
-  });
-  const [lastDemoRun, setLastDemoRun] = useState<{ action: DemoAction; response: DemoScenarioResponse } | null>(null);
-  const [demoError, setDemoError] = useState<string | null>(null);
 
   const markApi = useCallback((endpoint: string, status: ApiUsageStatus) => {
     setApiUsage((prev) => ({ ...prev, [endpoint]: status }));
@@ -576,55 +552,6 @@ export default function Dashboard() {
     fetchProtectedDomainData,
   ]);
 
-  const runDemoScenario = useCallback(async (action: DemoAction) => {
-    if (!authToken) {
-      setDemoError('Login is required before launching demo scenarios.');
-      markApi(`/api/v1/demo/${action}`, 'auth');
-      return;
-    }
-
-    setDemoError(null);
-    setDemoLoading((prev) => ({ ...prev, [action]: true }));
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/demo/${action}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
-        },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        markApi(`/api/v1/demo/${action}`, res.status === 401 || res.status === 403 ? 'auth' : 'error');
-        setDemoError(data?.message ? String(data.message) : `Scenario failed (${res.status})`);
-        return;
-      }
-
-      markApi(`/api/v1/demo/${action}`, 'ok');
-      setLastDemoRun({
-        action,
-        response: {
-          status: String(data?.status || 'ok') as DemoScenarioResponse['status'],
-          scenario_id: String(data?.scenario_id || `${action}-${Date.now()}`),
-          message: String(data?.message || 'Scenario completed.'),
-          incident_id: data?.incident_id ? String(data.incident_id) : undefined,
-          affected_entities: Array.isArray(data?.affected_entities) ? data.affected_entities.map(String) : [],
-          results: data?.results && typeof data.results === 'object' ? data.results : {},
-          errors: Array.isArray(data?.errors) ? data.errors.map(String) : [],
-        },
-      });
-
-      refreshAll();
-      window.setTimeout(refreshAll, 1200);
-      window.setTimeout(refreshAll, 3200);
-    } catch {
-      markApi(`/api/v1/demo/${action}`, 'error');
-      setDemoError('Scenario request failed. Please check the gateway and upstream services.');
-    } finally {
-      setDemoLoading((prev) => ({ ...prev, [action]: false }));
-    }
-  }, [authToken, markApi, refreshAll]);
-
   // Initial load + poll every 30s
   useEffect(() => {
     refreshAll();
@@ -782,40 +709,6 @@ export default function Dashboard() {
 
   if (!metrics) return <div className="text-center mt-20 text-slate-500">Connecting to backend...</div>;
 
-  const demoActions: Array<{
-    key: DemoAction;
-    label: string;
-    description: string;
-    accent: string;
-    href: string;
-    cta: string;
-  }> = [
-    {
-      key: 'threat-wave',
-      label: 'Launch Threat Wave',
-      description: 'Inject a deterministic burst of live threat events to light up alerts, MITRE coverage, and campaign visibility.',
-      accent: 'border-cyan-200 bg-cyan-50/70',
-      href: '#live-alerts-panel',
-      cta: 'Open live alerts',
-    },
-    {
-      key: 'phishing-scenario',
-      label: 'Run Phishing Scenario',
-      description: 'Analyze a finance-themed lure, score the malicious link, and push the finding toward incident escalation.',
-      accent: 'border-amber-200 bg-amber-50/80',
-      href: '#social-engineering-panel',
-      cta: 'View social intel',
-    },
-    {
-      key: 'incident-scenario',
-      label: 'Trigger Incident Response',
-      description: 'Create a critical ransomware incident and show automated playbook execution plus forensic evidence.',
-      accent: 'border-rose-200 bg-rose-50/80',
-      href: '/incidents',
-      cta: 'Open incidents board',
-    },
-  ];
-
   return (
     <div className="space-y-6">
       {/* Page header + live/demo badge */}
@@ -871,107 +764,7 @@ export default function Dashboard() {
           >
             {tab.label}
           </button>
-        ))}
-      </div>
-
-      <div className="card border-[#BFD1FA] bg-gradient-to-br from-[#F8FBFF] to-white" id="demo-console">
-        <div className="card-header flex items-center justify-between gap-2">
-          <span>Hackathon Demo Console</span>
-          <span className="text-[11px] uppercase tracking-[0.2em] text-[#517EF9]">3 live stories</span>
-        </div>
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-          {demoActions.map((action) => (
-            <div key={action.key} className={`rounded-xl border p-3 ${action.accent}`}>
-              <div className="text-sm font-semibold text-slate-900">{action.label}</div>
-              <p className="mt-1 text-xs leading-5 text-slate-600">{action.description}</p>
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  onClick={() => runDemoScenario(action.key)}
-                  disabled={demoLoading[action.key]}
-                  className="px-3 py-2 rounded-lg bg-[#517EF9] text-white text-xs font-semibold hover:bg-[#436FE8] disabled:opacity-60"
-                >
-                  {demoLoading[action.key] ? 'Running...' : action.label}
-                </button>
-                {action.href.startsWith('/') ? (
-                  <Link to={action.href} className="text-xs font-medium text-[#517EF9] hover:text-[#365FD6]">
-                    {action.cta}
-                  </Link>
-                ) : (
-                  <a href={action.href} className="text-xs font-medium text-[#517EF9] hover:text-[#365FD6]">
-                    {action.cta}
-                  </a>
-                )}
-              </div>
-            </div>
           ))}
-        </div>
-        {(lastDemoRun || demoError) && (
-          <div className={`mt-4 rounded-xl border p-4 ${demoError ? 'border-red-200 bg-red-50' : 'border-[#D8E3F7] bg-white'}`}>
-            {demoError ? (
-              <p className="text-sm text-red-700">{demoError}</p>
-            ) : lastDemoRun && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">
-                      {demoActions.find((item) => item.key === lastDemoRun.action)?.label}
-                    </p>
-                    <p className="text-xs text-slate-500">{lastDemoRun.response.scenario_id}</p>
-                  </div>
-                  <span className={`text-[11px] px-2.5 py-1 rounded-full font-semibold uppercase tracking-wide ${stateBadgeClass(lastDemoRun.response.status === 'ok' ? 'live' : lastDemoRun.response.status === 'partial' ? 'degraded' : 'error')}`}>
-                    {lastDemoRun.response.status}
-                  </span>
-                </div>
-                <p className="text-sm text-slate-700">{lastDemoRun.response.message}</p>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                  <div className="rounded-lg border border-[#E2E9FA] bg-[#F8FAFF] p-3">
-                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Entities</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-800">
-                      {(lastDemoRun.response.affected_entities || []).length > 0
-                        ? lastDemoRun.response.affected_entities!.slice(0, 3).join(', ')
-                        : 'Scenario-managed assets'}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-[#E2E9FA] bg-[#F8FAFF] p-3">
-                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Incident</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-800">
-                      {lastDemoRun.response.incident_id || 'No new incident'}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-[#E2E9FA] bg-[#F8FAFF] p-3">
-                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Key Result</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-800">
-                      {lastDemoRun.action === 'threat-wave'
-                        ? `${lastDemoRun.response.results?.detections_triggered ?? 0} detections`
-                        : lastDemoRun.action === 'phishing-scenario'
-                        ? `${String(lastDemoRun.response.results?.email_label ?? 'unknown').replace(/_/g, ' ')} verdict`
-                        : `${lastDemoRun.response.results?.playbook_steps ?? 0} playbook steps`}
-                    </p>
-                  </div>
-                </div>
-                {lastDemoRun.action === 'phishing-scenario' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
-                    <StatRow label="Email verdict" value={String(lastDemoRun.response.results?.email_label ?? 'unknown').replace(/_/g, ' ')} color="text-amber-700" />
-                    <StatRow label="URL risk" value={typeof lastDemoRun.response.results?.url_risk_score === 'number' ? `${Math.round(lastDemoRun.response.results.url_risk_score * 100)}%` : 'n/a'} color="text-red-600" />
-                    <StatRow label="Psychographic tier" value={lastDemoRun.response.results?.psychographic_risk_tier ?? 'n/a'} color="text-indigo-600" />
-                  </div>
-                )}
-                {lastDemoRun.action === 'incident-scenario' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
-                    <StatRow label="Severity" value={lastDemoRun.response.results?.severity ?? 'critical'} color="text-red-600" />
-                    <StatRow label="Execution" value={lastDemoRun.response.results?.execution_status ?? 'queued'} color="text-cyan-700" />
-                    <StatRow label="Audit entries" value={String(lastDemoRun.response.results?.audit_entries ?? 0)} color="text-slate-700" />
-                  </div>
-                )}
-                {lastDemoRun.response.errors && lastDemoRun.response.errors.length > 0 && (
-                  <p className="text-xs text-yellow-700">
-                    Upstream notes: {lastDemoRun.response.errors.join(' | ')}
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {(activeSection === 'apis' || activeSection === 'overview') && (

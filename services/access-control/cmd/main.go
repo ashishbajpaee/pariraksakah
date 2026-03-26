@@ -33,7 +33,7 @@ import (
 // ── Config ────────────────────────────────────
 
 var (
-	tokenTTL          = 15 * time.Minute
+	tokenTTL          = parseDuration(env("ACCESS_TOKEN_TTL", "8h"), 8*time.Hour)
 	refreshTTL        = 24 * time.Hour
 	authIssuer        = env("ACCESS_CONTROL_ISSUER", "http://access-control:8002")
 	tokenAudience     = env("JWT_AUDIENCE", "pariraksakah-api")

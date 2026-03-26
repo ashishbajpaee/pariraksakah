@@ -313,11 +313,10 @@ function ForensicEvidenceChain({ incidentId, authToken }: { incidentId: string; 
 
 // ── Component ──────────────────────────────────
 
-export default function IncidentResponse() {
+export default function IncidentResponse({ authToken }: { authToken: string }) {
   const [selectedIncident, setSelectedIncident] = useState<Incident>(ACTIVE_INCIDENTS[0]);
   const [playbooks, setPlaybooks] = useState<Playbook[]>(PLAYBOOKS);
   const [incidents, setIncidents] = useState<Incident[]>(ACTIVE_INCIDENTS);
-  const [authToken] = useState<string>(() => localStorage.getItem('dashboard_access_token') || '');
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<{ role: string; text: string; demo?: boolean }[]>([
     { role: 'system', text: 'AI Investigator ready. Connected to Claude 3 Haiku for forensic log analysis.' },
@@ -332,7 +331,7 @@ export default function IncidentResponse() {
       try {
         const [playbooksRes, incidentsRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/soar/playbooks`, { headers: { Authorization: `Bearer ${authToken}` } }),
-          fetch(`${API_BASE}/api/v1/incidents`, { headers: { Authorization: `Bearer ${authToken}` } }),
+          fetch(`${API_BASE}/api/v1/soar/incidents`, { headers: { Authorization: `Bearer ${authToken}` } }),
         ]);
 
         if (playbooksRes.ok) {

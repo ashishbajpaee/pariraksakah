@@ -33,17 +33,20 @@ docker-compose up -d --build
 python scripts/demo_simulator.py
 ```
 
-### 5. Hackathon one-click demo flow
+### 5. Hackathon script-driven demo flow
 
-After signing in on the dashboard with `admin / admin123`, use the built-in **Demo Console** on the main SOC page.
+After signing in on the dashboard with `admin / admin123`, run the scenario scripts from PowerShell in the repository root.
 
-The three scenario buttons are designed for judge-friendly live stories:
+- `powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-ThreatWave.ps1`
+- `powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-AnonymousPhishing.ps1`
+- `powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-IncidentResponse.ps1`
 
-- `Launch Threat Wave` - injects deterministic live threat events into detection and monitoring
-- `Run Phishing Scenario` - analyzes a finance-themed phishing lure and escalates it into an incident
-- `Trigger Incident Response` - creates a critical ransomware incident and launches automated containment
+Optional supporting injectors:
 
-These scenarios refresh the dashboard automatically and deep-link into the strongest visual sections of the product.
+- `powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-MalwareBurst.ps1`
+- `powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-RansomwareScenario.ps1`
+
+These scripts call the live gateway routes directly and are deterministic enough for repeatable judge demos.
 
 Use [HACKATHON_RUNBOOK.md](./HACKATHON_RUNBOOK.md) for the fastest startup checklist, judge pitch sequence, and fallback plan.
 
@@ -123,11 +126,6 @@ GET  /auth/.well-known/openid-configuration → OIDC discovery
 
 ### Protected (requires JWT Bearer token)
 ```
-# Demo flows
-POST /api/v1/demo/threat-wave      → Launch threat-detection showcase
-POST /api/v1/demo/phishing-scenario → Launch phishing + escalation showcase
-POST /api/v1/demo/incident-scenario → Launch SOAR/remediation showcase
-
 # Threat Detection & Alerts
 GET  /api/v1/threats/*          → Threat detection service
 GET  /api/v1/alerts?limit=100   → Alert feed
@@ -143,6 +141,8 @@ POST /api/v1/phishing/url       → Analyze URL
 
 # SOAR
 GET  /api/v1/soar/playbooks     → List playbooks
+GET  /api/v1/soar/incidents     → List incidents
+POST /api/v1/soar/incidents     → Create incident
 POST /api/v1/soar/playbooks/:name/execute → Run playbook
 
 # Bio-Auth
