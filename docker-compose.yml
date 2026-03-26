@@ -336,7 +336,52 @@ services:
     restart: unless-stopped
     networks: [cybershield-net]
 
+  # ─── AI Predictive Threat Intelligence ─────────────────────
+  prediction-engine:
+    build:
+      context: ./services/predictive-threat-intel/src
+      dockerfile: Dockerfile
+    ports: ["8040:8040"]
+    environment:
+      <<: *common-env
+      THREAT_INTEL_PORT: "8040"
+      RETRAIN_INTERVAL_HOURS: "6"
+    volumes:
+      - prediction-models:/models
+    depends_on: [kafka, timescaledb, redis]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  threat-feed-integration:
+    build:
+      context: ./services/predictive-threat-intel/feeds
+      dockerfile: Dockerfile
+    ports: ["8041:8041"]
+    environment:
+      <<: *common-env
+      THREAT_FEED_PORT: "8041"
+      FEED_REFRESH_SECS: "900"
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      ALIENVAULT_OTX_KEY: ${ALIENVAULT_OTX_KEY:-}
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
+    depends_on: [redis, timescaledb]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
+  ueba-behavioral-engine:
+    build:
+      context: ./services/predictive-threat-intel/behavioral
+      dockerfile: Dockerfile
+    ports: ["8042:8042"]
+    environment:
+      <<: *common-env
+      BEHAVIORAL_PORT: "8042"
+    depends_on: [redis, timescaledb]
+    restart: unless-stopped
+    networks: [cybershield-net]
+
 volumes:
+  prediction-models:
   postgres-data:
   neo4j-data:
   redis-data:
