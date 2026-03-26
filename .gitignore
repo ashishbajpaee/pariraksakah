@@ -53,3 +53,10 @@ htmlcov/
 .coverage
 coverage.xml
 .vercel
+datasets/
+dataset/
+\ndatasets/
+dataset/
+
+# Predictive Threat Intel local venv
+services/predictive-threat-intel/.venv/

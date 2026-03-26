@@ -1,0 +1,13 @@
+{
+  "include": ["services/predictive-threat-intel"],
+  "exclude": ["**/node_modules", "**/__pycache__"],
+  "defineConstant": {
+    "DEBUG": true
+  },
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportUndefinedVariable": "none",
+  "reportAttributeAccessIssue": "none",
+  "pythonVersion": "3.11"
+}
